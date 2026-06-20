@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Hackathon: un lint error nunca debe tumbar un deploy de Vercel
+  // Hackathon: a lint error should never break a Vercel deploy
   eslint: { ignoreDuringBuilds: true },
 };
 
