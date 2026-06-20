@@ -4,6 +4,7 @@ import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Ticket from "@/models/Ticket";
 import { getObjectBuffer } from "@/libs/storage/r2";
+import { enhanceForOCR } from "@/libs/image/enhancement";
 import { ocrImage } from "@/libs/ocr/googleVision";
 import { parseTicket } from "@/libs/ocr/parseTicket";
 import { createLogger } from "@/libs/core/logger";
@@ -74,7 +75,12 @@ export async function POST(request, { params }) {
       );
     }
 
-    const rawText = await ocrImage(buffer);
+    // Best-effort pre-OCR enhancement (contrast/blur/brightness/resolution).
+    // Returns the original bytes unchanged if the image is already good or if
+    // Sharp fails — it never blocks OCR.
+    const ocrBuffer = await enhanceForOCR(buffer);
+
+    const rawText = await ocrImage(ocrBuffer);
 
     // Guard: Vision found little or no text — the photo is unreadable. Leave the
     // ticket at "uploaded" so the client can retry with a better image.
