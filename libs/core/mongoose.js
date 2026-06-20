@@ -30,7 +30,14 @@ export async function connectMongoose() {
     cached.promise = mongoose.connect(uri, { bufferCommands: false });
   }
 
-  cached.conn = await cached.promise;
+  try {
+    cached.conn = await cached.promise;
+  } catch (err) {
+    // Reset the cached promise so a rejected connection isn't kept forever;
+    // the next call retries a fresh connect once the DB/env/network recovers.
+    cached.promise = null;
+    throw err;
+  }
   return cached.conn;
 }
 
