@@ -76,6 +76,33 @@ export async function getPresignedPutUrl({ key, contentType, expiresIn = 900 }) 
 }
 
 /**
+ * Upload a buffer to R2 directly from the server. Used for bytes the server
+ * produces itself (e.g. engine browser screenshots) rather than client uploads,
+ * which go through a presigned PUT instead.
+ *
+ * @param {Object} params
+ * @param {string} params.key - Object key (path) in the bucket.
+ * @param {Buffer|Uint8Array} params.body - The bytes to store.
+ * @param {string} [params.contentType] - MIME type to store the object as.
+ * @returns {Promise<string>} The key the object was stored under.
+ */
+export async function putObjectBuffer({ key, body, contentType }) {
+  if (!key) throw new Error("putObjectBuffer: key is required");
+  if (!body) throw new Error("putObjectBuffer: body is required");
+
+  await getClient().send(
+    new PutObjectCommand({
+      Bucket: getBucket(),
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    })
+  );
+
+  return key;
+}
+
+/**
  * Read an object back from R2 by key and return its full bytes as a Buffer.
  *
  * @param {string} key - Object key in the bucket.
