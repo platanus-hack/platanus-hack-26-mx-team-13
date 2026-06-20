@@ -46,14 +46,16 @@ export async function enhanceForOCR(buffer) {
 
     let pipeline = sharp(buffer);
 
-    // 1. Resize down to a sane width if the resolution is too low to help OCR.
-    //    fit:inside + withoutEnlargement keeps aspect ratio and never upscales.
+    // 1. Upscale to a sane width when the resolution is too low for OCR — tiny
+    //    print needs more pixels to be legible. lanczos3 keeps edges crisp on
+    //    enlargement; fit:inside preserves aspect ratio. No withoutEnlargement
+    //    here: the whole point of this branch is to add resolution, so capping
+    //    enlargement would make the fix a no-op for the images that need it.
     if (quality.isLowResolution) {
       pipeline = pipeline.resize({
         width: TARGET_WIDTH,
         fit: "inside",
         kernel: "lanczos3",
-        withoutEnlargement: true,
       });
     }
 
