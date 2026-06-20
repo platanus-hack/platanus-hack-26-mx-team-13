@@ -43,3 +43,6 @@ next-env.d.ts
 # ao local config + secrets (never commit)
 agent-orchestrator.yaml
 .env.local
+
+# keep the env contract tracked (overrides .env*)
+!.env.example
