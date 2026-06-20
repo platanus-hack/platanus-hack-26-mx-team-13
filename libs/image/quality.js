@@ -67,6 +67,9 @@ export async function analyzeImageQuality(buffer) {
     const meta = await sharp(buffer).metadata();
     const width = meta?.width || 0;
     const height = meta?.height || 0;
+    // EXIF orientation (1 = normal). 5-8 rotate 90/270°, swapping on-screen
+    // dimensions — enhancement.js needs this to resize the oriented image.
+    const orientation = meta?.orientation || 1;
     const isLowResolution =
       width > 0 && height > 0 && Math.min(width, height) < T.MIN_RESOLUTION;
 
@@ -126,6 +129,7 @@ export async function analyzeImageQuality(buffer) {
       metrics: {
         width,
         height,
+        orientation,
         contrastRange,
         brightness,
         blurScore,

@@ -55,7 +55,10 @@ export async function enhanceForOCR(buffer) {
       return buffer;
     }
 
-    let pipeline = sharp(buffer);
+    // Auto-orient from EXIF first. Re-encoding strips the orientation tag, so a
+    // sideways phone photo would otherwise reach Vision rotated; .rotate() bakes
+    // the orientation into the pixels before we drop the metadata.
+    let pipeline = sharp(buffer).rotate();
 
     // 1. Upscale to a sane width when the resolution is too low for OCR — tiny
     //    print needs more pixels to be legible. lanczos3 keeps edges crisp on
@@ -64,7 +67,12 @@ export async function enhanceForOCR(buffer) {
     //    this branch a no-op for the small images it targets; and (b) clamp the
     //    longer side to MAX_DIMENSION so a tall/narrow receipt can't balloon
     //    into a multi-megapixel image that overflows Vision's inline payload.
-    const { width: w, height: h } = quality.metrics;
+    //    Use the *oriented* dimensions: EXIF orientations 5-8 swap width/height,
+    //    and the resize runs after .rotate().
+    const { width: rawW, height: rawH, orientation } = quality.metrics;
+    const swapped = orientation >= 5 && orientation <= 8;
+    const w = swapped ? rawH : rawW;
+    const h = swapped ? rawW : rawH;
     let resized = false;
     if (quality.isLowResolution && w > 0 && h > 0) {
       // Target the width, but never let either side exceed MAX_DIMENSION, and
