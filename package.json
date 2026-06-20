@@ -1,7 +1,10 @@
 {
-  "name": "facturin-tmp",
+  "name": "facturin-hack",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
