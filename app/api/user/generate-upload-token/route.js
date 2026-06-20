@@ -8,12 +8,27 @@ const log = createLogger({ component: "api:generate-upload-token" });
 // This route signs requests with R2 credentials at call time — never prerender it.
 export const dynamic = "force-dynamic";
 
-// Only CSF PDFs are uploaded through this endpoint today.
-const ALLOWED_CONTENT_TYPE = "application/pdf";
+// Upload kinds this endpoint can sign. Each kind owns its key prefix and the set
+// of content types it accepts:
+//   - "csf":    CSF constancia PDFs              -> csf/{userId}/...     (PDF only)
+//   - "ticket": receipt photos/scans (#25)       -> tickets/{userId}/... (image/* or PDF)
+const UPLOAD_KINDS = {
+  csf: {
+    prefix: "csf",
+    accepts: (contentType) => contentType === "application/pdf",
+    rejectMessage: "contentType must be application/pdf",
+  },
+  ticket: {
+    prefix: "tickets",
+    accepts: (contentType) =>
+      contentType === "application/pdf" || contentType.startsWith("image/"),
+    rejectMessage: "contentType must be an image/* or application/pdf",
+  },
+};
 
 // POST /api/user/generate-upload-token
-// Body: { fileName, contentType }
-// Returns a presigned PUT URL the client uses to upload a CSF PDF straight to R2,
+// Body: { fileName, contentType, kind? }  (kind defaults to "csf" for back-compat)
+// Returns a presigned PUT URL the client uses to upload the file straight to R2,
 // plus the object key the server later reads back.
 export async function POST(request) {
   try {
@@ -24,7 +39,11 @@ export async function POST(request) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    const { fileName, contentType } = await request.json().catch(() => ({}));
+    const {
+      fileName,
+      contentType,
+      kind = "csf",
+    } = await request.json().catch(() => ({}));
 
     if (!fileName || typeof fileName !== "string") {
       return NextResponse.json(
@@ -33,9 +52,17 @@ export async function POST(request) {
       );
     }
 
-    if (contentType !== ALLOWED_CONTENT_TYPE) {
+    const uploadKind = UPLOAD_KINDS[kind];
+    if (!uploadKind) {
       return NextResponse.json(
-        { error: "contentType must be application/pdf" },
+        { error: `kind must be one of: ${Object.keys(UPLOAD_KINDS).join(", ")}` },
+        { status: 400 }
+      );
+    }
+
+    if (typeof contentType !== "string" || !uploadKind.accepts(contentType)) {
+      return NextResponse.json(
+        { error: uploadKind.rejectMessage },
         { status: 400 }
       );
     }
@@ -44,7 +71,7 @@ export async function POST(request) {
     // dash; collapse everything else to underscores. Prevents path traversal and
     // odd characters in the object key.
     const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, "_");
-    const key = `csf/${userId}/${Date.now()}-${sanitizedFileName}`;
+    const key = `${uploadKind.prefix}/${userId}/${Date.now()}-${sanitizedFileName}`;
 
     const uploadUrl = await getPresignedPutUrl({ key, contentType });
 

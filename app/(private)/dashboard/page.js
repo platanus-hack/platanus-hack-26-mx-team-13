@@ -1,8 +1,10 @@
+import { Toaster } from "react-hot-toast";
 import { auth } from "@/libs/core/auth";
+import TicketUpload from "@/components/TicketUpload";
 
 // Authenticated home. The (private) layout already gated access, so `session`
-// is guaranteed here. Hosts placeholder slots for the CSF upload (#7) and the
-// tickets/CFDI list, wired up in later issues.
+// is guaranteed here. Hosts the CSF upload slot (#7, wired up later) and the
+// ticket upload (#25).
 export default async function DashboardPage() {
   const session = await auth();
 
@@ -30,10 +32,15 @@ export default async function DashboardPage() {
             Tickets
           </h2>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Coming soon.
+            Snap a photo of a receipt or upload an image/PDF.
           </p>
+          <div className="mt-4">
+            <TicketUpload />
+          </div>
         </section>
       </div>
+
+      <Toaster position="bottom-center" />
     </div>
   );
 }
