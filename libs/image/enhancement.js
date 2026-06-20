@@ -14,9 +14,20 @@ import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "image:enhancement" });
 
-// Target width for low-resolution upscaling (kept as downscale-only via
-// withoutEnlargement, so this only ever shrinks oversized photos).
+// Target width for low-resolution upscaling — small print needs more pixels to
+// be legible to OCR.
 const TARGET_WIDTH = 1800;
+
+// Hard cap on either output dimension. Upscaling a tall/narrow receipt toward
+// TARGET_WIDTH could otherwise produce something like 1800x18000, which bloats
+// the base64-inlined Vision payload past its limit. Bound both sides so the
+// resize can never explode.
+const MAX_DIMENSION = 4000;
+
+// Safety cap on the enhanced buffer. If the result is still too large for the
+// inline Vision payload (~10MB JSON; base64 adds ~33%), fall back to the
+// original bytes rather than risk a Vision 500.
+const MAX_OUTPUT_BYTES = 7 * 1024 * 1024;
 
 // Output encoding for the OCR payload.
 const JPEG_QUALITY = 88;
@@ -48,15 +59,27 @@ export async function enhanceForOCR(buffer) {
 
     // 1. Upscale to a sane width when the resolution is too low for OCR — tiny
     //    print needs more pixels to be legible. lanczos3 keeps edges crisp on
-    //    enlargement; fit:inside preserves aspect ratio. No withoutEnlargement
-    //    here: the whole point of this branch is to add resolution, so capping
-    //    enlargement would make the fix a no-op for the images that need it.
-    if (quality.isLowResolution) {
-      pipeline = pipeline.resize({
-        width: TARGET_WIDTH,
-        fit: "inside",
-        kernel: "lanczos3",
-      });
+    //    enlargement. We compute the scale ourselves (rather than passing a bare
+    //    width) so we can: (a) actually enlarge — withoutEnlargement would make
+    //    this branch a no-op for the small images it targets; and (b) clamp the
+    //    longer side to MAX_DIMENSION so a tall/narrow receipt can't balloon
+    //    into a multi-megapixel image that overflows Vision's inline payload.
+    const { width: w, height: h } = quality.metrics;
+    let resized = false;
+    if (quality.isLowResolution && w > 0 && h > 0) {
+      // Target the width, but never let either side exceed MAX_DIMENSION, and
+      // never downscale here (this branch only adds resolution).
+      const scale = Math.max(
+        1,
+        Math.min(TARGET_WIDTH / w, MAX_DIMENSION / Math.max(w, h))
+      );
+      if (scale > 1) {
+        pipeline = pipeline.resize({
+          width: Math.round(w * scale),
+          kernel: "lanczos3",
+        });
+        resized = true;
+      }
     }
 
     // 2. Grayscale always — drops color noise OCR doesn't need.
@@ -86,11 +109,24 @@ export async function enhanceForOCR(buffer) {
     // 7. Encode JPEG q88 for a compact inline Vision payload.
     const output = await pipeline.jpeg({ quality: JPEG_QUALITY }).toBuffer();
 
+    // Safety net: if the enhanced buffer is too large for the inline Vision
+    // payload, fall back to the original bytes rather than risk a 500. (The
+    // dimension cap above should prevent this; this guards against any
+    // remaining edge case, e.g. a very large original.)
+    if (output.length > MAX_OUTPUT_BYTES) {
+      log.warn("Enhanced image too large — using original bytes", {
+        inputBytes: buffer.length,
+        outputBytes: output.length,
+        maxBytes: MAX_OUTPUT_BYTES,
+      });
+      return buffer;
+    }
+
     log.info("Image enhanced for OCR", {
       inputBytes: buffer.length,
       outputBytes: output.length,
       applied: {
-        resize: quality.isLowResolution,
+        resize: resized,
         normalize: quality.isLowContrast,
         sharpen: quality.isBlurry,
         median: quality.isVeryBlurry,
