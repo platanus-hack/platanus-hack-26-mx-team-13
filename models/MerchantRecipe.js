@@ -178,8 +178,16 @@ merchantRecipeSchema.statics.recordFailure = async function recordFailure(
 };
 
 /**
- * Create a new active recipe version for a merchant: deactivate any prior
- * active recipes and bump the version above the highest existing one.
+ * Create a new active recipe version for a merchant and retire the prior ones,
+ * bumping the version above the highest existing one.
+ *
+ * Ordering matters: the replacement is created (and validated/persisted) BEFORE
+ * the old active recipes are deactivated. If the new recipe is invalid (bad
+ * step action/dataKey, invalid recordedVia, ...), create() throws first and the
+ * previously working recipe stays active — the merchant is never left with zero
+ * active recipes. The only transient state is "two active", which
+ * findActiveByRfc resolves to the newest version.
+ *
  * @param {string} rfcEmisor
  * @param {Array<Object>} steps
  * @param {string} invoiceUrl
@@ -200,14 +208,10 @@ merchantRecipeSchema.statics.createNewVersion = async function createNewVersion(
     .select("version");
   const nextVersion = latest ? latest.version + 1 : 1;
 
-  // Retire any currently-active recipes for this RFC.
-  await this.updateMany(
-    { rfcEmisor: rfc, isActive: true },
-    { $set: { isActive: false } }
-  );
-
+  // Create + validate the replacement first. A validation failure throws here,
+  // before any deactivation, so the existing active recipe is left untouched.
   // Structural fields win over opts so callers can't accidentally override them.
-  return this.create({
+  const created = await this.create({
     ...opts,
     rfcEmisor: rfc,
     steps: steps ?? [],
@@ -215,6 +219,14 @@ merchantRecipeSchema.statics.createNewVersion = async function createNewVersion(
     version: nextVersion,
     isActive: true,
   });
+
+  // Only now retire the prior active recipes (everything except the new one).
+  await this.updateMany(
+    { rfcEmisor: rfc, isActive: true, _id: { $ne: created._id } },
+    { $set: { isActive: false } }
+  );
+
+  return created;
 };
 
 // Active-recipe lookups by merchant.
