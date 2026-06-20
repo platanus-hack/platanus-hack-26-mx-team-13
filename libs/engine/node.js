@@ -51,7 +51,11 @@ export function engineError(message, errorType = ENGINE_ERRORS.UNKNOWN.code) {
  * Run an engine node and automatically append a Stage describing the outcome.
  *
  * On success: returns the node's partial (minus the transient `detail`) plus a
- * `stages` array = previous stages + a new ok:true entry.
+ * `stages` array = previous stages + a new ok:true entry. It also clears
+ * `error`/`errorType` (→ null) so a recoverable flow (e.g. CAPTCHA_DETECTED →
+ * awaiting_human → success) doesn't leave a stale failure on the merged state;
+ * a node that deliberately reports `error`/`errorType` in its partial overrides
+ * this.
  * On throw: swallows the error and returns `{ error, errorType, stages }` where
  * stages gains an ok:false entry carrying the error's code (UNKNOWN if untagged).
  *
@@ -72,7 +76,9 @@ export async function runNode(name, fn, state) {
     const { detail = null, ...partial } = result;
     /** @type {Stage} */
     const stage = { stage: name, ok: true, detail, errorType: null, at };
-    return { ...partial, stages: [...previous, stage] };
+    // Clear any stale failure from an earlier node; an explicit error/errorType
+    // in the node's own partial still wins (spread order).
+    return { error: null, errorType: null, ...partial, stages: [...previous, stage] };
   } catch (err) {
     const code =
       err && err.errorType && ENGINE_ERRORS[err.errorType]
