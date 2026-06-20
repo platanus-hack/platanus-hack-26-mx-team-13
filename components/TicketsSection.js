@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import TicketUpload from "@/components/TicketUpload";
+import TicketDetail from "@/components/TicketDetail";
 import { STATUS, formatTotal, formatDate } from "@/components/ticketFormat";
 
 // The dashboard is an action surface, not the full list — show only a preview.
@@ -18,6 +19,8 @@ const PREVIEW_LIMIT = 5;
 export default function TicketsSection() {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
+  // The ticket whose detail modal is open (null = closed).
+  const [selected, setSelected] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -66,31 +69,45 @@ export default function TicketsSection() {
               const status = STATUS[t.status] || STATUS.uploaded;
               const e = t.extracted || {};
               return (
-                <li
-                  key={t.id}
-                  className="flex items-center justify-between gap-3 py-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-black dark:text-zinc-100">
-                      {e.merchantNameGuess || e.rfcEmisor || "Receipt"}
-                    </p>
-                    <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-                      {formatTotal(e.total)}
-                      {e.date ? ` · ${formatDate(e.date)}` : ""}
-                      {e.rfcEmisor ? ` · ${e.rfcEmisor}` : ""}
-                    </p>
-                  </div>
-                  <span
-                    className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(t)}
+                    className="flex w-full items-center gap-3 py-3 text-left transition-colors hover:bg-black/[.03] dark:hover:bg-white/[.04]"
                   >
-                    {status.label}
-                  </span>
+                    {/* eslint-disable-next-line @next/next/no-img-element -- private auth-gated proxy, not optimizable by next/image */}
+                    <img
+                      src={`/api/user/tickets/${t.id}/image`}
+                      alt=""
+                      loading="lazy"
+                      className="h-10 w-10 shrink-0 rounded-lg border border-black/[.08] object-cover dark:border-white/[.145]"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-black dark:text-zinc-100">
+                        {e.merchantNameGuess || e.rfcEmisor || "Receipt"}
+                      </p>
+                      <p className="truncate text-xs text-zinc-500 dark:text-zinc-400">
+                        {formatTotal(e.total)}
+                        {e.date ? ` · ${formatDate(e.date)}` : ""}
+                        {e.rfcEmisor ? ` · ${e.rfcEmisor}` : ""}
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}
+                    >
+                      {status.label}
+                    </span>
+                  </button>
                 </li>
               );
             })}
           </ul>
         )}
       </div>
+
+      {selected ? (
+        <TicketDetail ticket={selected} onClose={() => setSelected(null)} />
+      ) : null}
     </div>
   );
 }
