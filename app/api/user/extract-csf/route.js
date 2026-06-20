@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { auth } from "@/libs/core/auth";
 import { getObjectBuffer } from "@/libs/storage/r2";
 import { processCSFPDF } from "@/libs/csf/csf-parser";
+import connectMongoose from "@/libs/core/mongoose";
+import Company from "@/models/Company";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "api:extract-csf" });
@@ -12,7 +14,8 @@ export const dynamic = "force-dynamic";
 // POST /api/user/extract-csf
 // Body: { key }
 // Reads the CSF PDF from R2 by key (uploaded via the presigned PUT flow),
-// extracts the fiscal profile deterministically, and returns it.
+// extracts the fiscal profile deterministically, persists it as the user's
+// Company (the engine's billingData source), and returns the saved profile.
 export async function POST(request) {
   try {
     // Gate on the shared NextAuth session.
@@ -58,7 +61,49 @@ export async function POST(request) {
       return NextResponse.json({ error: error.message }, { status: 422 });
     }
 
-    return NextResponse.json(data);
+    // Persist the fiscal profile. The unique {userId, rfc} index means a
+    // re-upload of the same RFC updates the existing Company instead of
+    // duplicating it; a different RFC creates a new one.
+    let company;
+    try {
+      await connectMongoose();
+      company = await Company.findOneAndUpdate(
+        { userId, rfc: data.rfc },
+        {
+          $set: {
+            userId,
+            rfc: data.rfc,
+            curp: data.curp,
+            businessName: data.businessName,
+            tradeName: data.tradeName,
+            taxRegime: data.taxRegime,
+            registryStatus: data.registryStatus,
+            operationsStartDate: data.operationsStartDate,
+            fiscalAddress: data.fiscalAddress,
+            csfPdfUrl: key,
+          },
+        },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true,
+          runValidators: true,
+        }
+      );
+      log.info("Company upserted from CSF", {
+        companyId: company._id.toString(),
+        userId,
+        rfc: company.rfc,
+      });
+    } catch (error) {
+      log.error("Failed to save Company from CSF:", error);
+      return NextResponse.json(
+        { error: "Could not save your fiscal profile" },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ ...data, company });
   } catch (error) {
     log.error("Unexpected error extracting CSF:", error);
     return NextResponse.json(
