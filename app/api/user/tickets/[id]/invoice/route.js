@@ -9,6 +9,12 @@ import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "api:tickets:invoice" });
 
+// A run may (re)start only when there is no prior run or the last one failed.
+// Every other invoice status — queued / in-progress / awaiting_human /
+// ready_to_submit / done — means a run is already active or completed, so a
+// second request must be rejected rather than enqueueing a duplicate.
+const RESTARTABLE_STATUSES = [INVOICE_STATUS.FAILED];
+
 // Reads the session and enqueues a Trigger.dev run — never prerender it.
 export const dynamic = "force-dynamic";
 
@@ -47,9 +53,60 @@ export async function POST(request, { params }) {
       );
     }
 
-    const handle = await tasks.trigger("process-invoice", {
-      ticketId: ticket._id.toString(),
-    });
+    // Idempotent start: atomically claim the ticket by stamping a fresh queued
+    // invoice, but only when no run is active (invoice is null or the last run
+    // FAILED). A concurrent double-click / retry finds no matching doc and is
+    // rejected below — preventing duplicate durable jobs from racing on
+    // ticket.invoice and driving / submitting the merchant form more than once.
+    const claimed = await Ticket.findOneAndUpdate(
+      {
+        _id: id,
+        userId,
+        status: "ocr_done",
+        $or: [
+          { invoice: null },
+          { "invoice.status": { $in: RESTARTABLE_STATUSES } },
+        ],
+      },
+      {
+        $set: {
+          invoice: {
+            status: INVOICE_STATUS.QUEUED,
+            ticketId: ticket._id,
+            userId,
+          },
+        },
+      },
+      { new: true }
+    );
+
+    if (!claimed) {
+      return NextResponse.json(
+        { error: "An invoice run is already in progress for this ticket" },
+        { status: 409 }
+      );
+    }
+
+    let handle;
+    try {
+      handle = await tasks.trigger("process-invoice", {
+        ticketId: ticket._id.toString(),
+      });
+    } catch (triggerError) {
+      // Enqueue failed after we claimed the ticket — release the claim (mark it
+      // failed, which is restartable) so the user can retry instead of being
+      // stuck on a queued run that never started.
+      await Ticket.updateOne(
+        { _id: id },
+        {
+          $set: {
+            "invoice.status": INVOICE_STATUS.FAILED,
+            "invoice.error": "Failed to enqueue invoice run",
+          },
+        }
+      );
+      throw triggerError;
+    }
 
     log.info("Triggered process-invoice", {
       ticketId: ticket._id.toString(),
