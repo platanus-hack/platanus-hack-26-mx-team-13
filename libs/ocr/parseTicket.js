@@ -1,0 +1,141 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+import { createLogger } from "@/libs/core/logger";
+
+// Step two of the OCR pipeline: turn Vision's raw receipt text into the small
+// set of structured fields the engine needs. We use Claude Haiku — cheap and
+// reliable at this kind of extraction — and force a tool call so the model
+// must return strict JSON matching our schema instead of prose.
+//
+// rfcEmisor is the deterministic merchant key downstream; never fuzzy-match by
+// name. merchantNameGuess is a hint only.
+//
+// Env (see .env.example):
+//   ANTHROPIC_API_KEY
+
+const log = createLogger({ component: "ocr:parse" });
+
+// Haiku 4.5 — fast/cheap, strong enough for receipt field extraction.
+const MODEL = "claude-haiku-4-5";
+
+// The strict shape we ask Haiku to fill. Every field is nullable: receipts are
+// messy and a missing field is expected, not an error.
+const extractedSchema = z.object({
+  rfcEmisor: z.string().nullable(),
+  folio: z.string().nullable(),
+  total: z.number().nullable(),
+  subtotal: z.number().nullable(),
+  date: z.string().nullable(),
+  merchantNameGuess: z.string().nullable(),
+});
+
+// JSON Schema mirror of extractedSchema, handed to Claude as a tool definition so
+// the response is constrained to this shape.
+const EXTRACT_TOOL = {
+  name: "extract_ticket",
+  description:
+    "Return the structured fields extracted from a Mexican purchase receipt (ticket).",
+  input_schema: {
+    type: "object",
+    properties: {
+      rfcEmisor: {
+        type: ["string", "null"],
+        description:
+          "The issuing merchant's RFC (Mexican tax ID), e.g. 'ABC123456T1A'. null if not present.",
+      },
+      folio: {
+        type: ["string", "null"],
+        description: "Receipt folio / ticket number. null if not present.",
+      },
+      total: {
+        type: ["number", "null"],
+        description: "Grand total amount as a number (no currency symbol).",
+      },
+      subtotal: {
+        type: ["number", "null"],
+        description: "Subtotal before tax as a number. null if not present.",
+      },
+      date: {
+        type: ["string", "null"],
+        description:
+          "Purchase date in ISO 8601 (YYYY-MM-DD or full timestamp). null if not present.",
+      },
+      merchantNameGuess: {
+        type: ["string", "null"],
+        description:
+          "Best guess at the merchant/store name. A hint only — not used as a key.",
+      },
+    },
+    required: [
+      "rfcEmisor",
+      "folio",
+      "total",
+      "subtotal",
+      "date",
+      "merchantNameGuess",
+    ],
+    additionalProperties: false,
+  },
+};
+
+const SYSTEM_PROMPT = `You extract structured data from the OCR text of Mexican purchase receipts (tickets de compra).
+
+Rules:
+- Call the extract_ticket tool exactly once with the fields you find.
+- Use null for any field not present in the text. Never invent or guess values for missing fields.
+- rfcEmisor is the merchant's RFC (12-13 alphanumeric chars, e.g. "XAXX010101000"). Only fill it if an RFC clearly appears; do not derive it from the merchant name.
+- total and subtotal are plain numbers (strip "$", "MXN", thousands separators).
+- date must be ISO 8601 (YYYY-MM-DD, optionally with time).
+- merchantNameGuess is a best-effort store name and is a hint only.`;
+
+/**
+ * Parse raw receipt OCR text into structured ticket fields using Claude Haiku.
+ *
+ * @param {string} rawText - The OCR text returned by Google Vision.
+ * @returns {Promise<{rfcEmisor: string|null, folio: string|null, total: number|null, subtotal: number|null, date: string|null, merchantNameGuess: string|null}>}
+ */
+export async function parseTicket(rawText) {
+  if (!rawText || !rawText.trim()) {
+    throw new Error("parseTicket: rawText is empty");
+  }
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "Anthropic is not configured — set ANTHROPIC_API_KEY in .env.local"
+    );
+  }
+
+  const anthropic = new Anthropic({ apiKey });
+
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 1024,
+    system: SYSTEM_PROMPT,
+    tools: [EXTRACT_TOOL],
+    // Force the model to call our tool so we always get strict JSON back.
+    tool_choice: { type: "tool", name: EXTRACT_TOOL.name },
+    messages: [
+      {
+        role: "user",
+        content: `Extract the fields from this receipt OCR text:\n\n${rawText}`,
+      },
+    ],
+  });
+
+  const toolUse = response.content.find((block) => block.type === "tool_use");
+  if (!toolUse) {
+    throw new Error("parseTicket: model did not return a tool call");
+  }
+
+  // Validate against zod so a malformed payload fails loudly rather than
+  // silently writing garbage into the Ticket.
+  const parsed = extractedSchema.parse(toolUse.input);
+
+  log.info("Ticket parsed", {
+    hasRfc: Boolean(parsed.rfcEmisor),
+    hasTotal: parsed.total != null,
+  });
+
+  return parsed;
+}

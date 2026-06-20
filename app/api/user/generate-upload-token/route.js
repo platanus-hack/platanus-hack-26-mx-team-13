@@ -11,7 +11,9 @@ export const dynamic = "force-dynamic";
 // Upload kinds this endpoint can sign. Each kind owns its key prefix and the set
 // of content types it accepts:
 //   - "csf":    CSF constancia PDFs              -> csf/{userId}/...     (PDF only)
-//   - "ticket": receipt photos/scans (#25)       -> tickets/{userId}/... (image/* or PDF)
+//   - "ticket": receipt photos/scans (#25)       -> tickets/{userId}/... (image/* only)
+// Tickets are images only: OCR (Google Vision) operates on raster images, so PDFs
+// would be a dead-end. CSF uploads legitimately use PDF and are unchanged.
 const UPLOAD_KINDS = {
   csf: {
     prefix: "csf",
@@ -20,9 +22,8 @@ const UPLOAD_KINDS = {
   },
   ticket: {
     prefix: "tickets",
-    accepts: (contentType) =>
-      contentType === "application/pdf" || contentType.startsWith("image/"),
-    rejectMessage: "contentType must be an image/* or application/pdf",
+    accepts: (contentType) => contentType.startsWith("image/"),
+    rejectMessage: "contentType must be an image/*",
   },
 };
 

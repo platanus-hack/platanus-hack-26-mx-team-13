@@ -4,8 +4,9 @@ import { useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 // Accepted on the client; the server (generate-upload-token + R2 signature) is the
-// real gate. Receipts are usually photos, but we also accept scanned PDFs.
-const ACCEPT = "image/*,application/pdf";
+// real gate. Tickets are images only — OCR (Google Vision) operates on raster
+// images, so PDFs are not accepted here (CSF uploads handle PDFs separately).
+const ACCEPT = "image/*";
 
 /**
  * TicketUpload — upload a receipt photo (mobile camera) or file straight to R2,
