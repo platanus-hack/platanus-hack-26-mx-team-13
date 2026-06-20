@@ -89,19 +89,22 @@ function firstOf(value) {
  * @param {string} userId - Owner of the ticket (User _id); also keys the Company.
  * @returns {Promise<BillingData>} Every dataKey resolved to a value or null.
  * @throws {Error & { errorType: string }} MISSING_COMPANY_DATA when the user has
- *   no active Company, or that Company has no RFC.
+ *   no active Company, or that Company has no RFC. Also throws (UNKNOWN) when no
+ *   Ticket matches the (ticketId, userId) pair.
  */
 export async function assembleBillingData(ticketId, userId) {
   await connectMongoose();
 
   // Company is keyed by userId. A user may hold more than one (multiple RFCs);
-  // prefer the most recently created active profile. Ticket and User are looked
-  // up by id. All three reads are independent → run them together.
+  // prefer the most recently created active profile. The Ticket is scoped to the
+  // same userId so a mismatched id can never pair one user's receipt with another
+  // user's fiscal profile. User is looked up by id. All three reads are
+  // independent → run them together.
   const [company, ticket, user] = await Promise.all([
     Company.findOne({ userId, isActive: true })
       .sort({ createdAt: -1 })
       .lean(),
-    Ticket.findById(ticketId).lean(),
+    Ticket.findOne({ _id: ticketId, userId }).lean(),
     User.findById(userId).lean(),
   ]);
 
@@ -112,8 +115,17 @@ export async function assembleBillingData(ticketId, userId) {
     );
   }
 
+  // No ticket for this user/id pair: refuse to assemble against an empty or
+  // someone else's receipt rather than silently returning all-null receipt fields.
+  if (!ticket) {
+    throw engineError(
+      `Ticket ${ticketId} not found for this user`,
+      ENGINE_ERRORS.UNKNOWN.code
+    );
+  }
+
   const regimeCode = firstOf(company.taxRegime);
-  const extracted = (ticket && ticket.extracted) || {};
+  const extracted = ticket.extracted || {};
 
   return {
     // Company (fiscal profile)
