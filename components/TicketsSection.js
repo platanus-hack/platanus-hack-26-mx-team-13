@@ -5,6 +5,9 @@ import Link from "next/link";
 import TicketUpload from "@/components/TicketUpload";
 import { STATUS, formatTotal, formatDate } from "@/components/ticketFormat";
 
+// The dashboard is an action surface, not the full list — show only a preview.
+const PREVIEW_LIMIT = 5;
+
 /**
  * TicketsSection — ticket uploader + the list of the user's tickets.
  *
@@ -18,7 +21,7 @@ export default function TicketsSection() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/user/tickets");
+      const res = await fetch(`/api/user/tickets?limit=${PREVIEW_LIMIT}`);
       if (res.ok) {
         const data = await res.json();
         setTickets(data.tickets || []);
@@ -39,15 +42,15 @@ export default function TicketsSection() {
       <TicketUpload onUploaded={load} />
 
       <div className="flex flex-col gap-2">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-            Your tickets
+            Recent tickets
           </h3>
           <Link
             href="/tickets"
-            className="text-xs font-medium text-zinc-500 transition-colors hover:text-black dark:text-zinc-400 dark:hover:text-zinc-100"
+            className="shrink-0 text-xs font-medium text-zinc-500 transition-colors hover:text-black dark:text-zinc-400 dark:hover:text-zinc-100"
           >
-            View all →
+            View all tickets →
           </Link>
         </div>
 
