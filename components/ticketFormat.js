@@ -38,3 +38,12 @@ export function formatDate(date) {
   const d = new Date(date);
   return Number.isNaN(d.getTime()) ? date : d.toLocaleDateString("es-MX");
 }
+
+// Date + time, for timestamps like createdAt where the moment of upload matters.
+export function formatDateTime(date) {
+  if (!date) return "";
+  const d = new Date(date);
+  return Number.isNaN(d.getTime())
+    ? date
+    : d.toLocaleString("es-MX", { dateStyle: "medium", timeStyle: "short" });
+}

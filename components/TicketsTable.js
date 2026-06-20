@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { STATUS, formatTotal, formatDate } from "@/components/ticketFormat";
+import TicketDetail from "@/components/TicketDetail";
 
 // Status-filter tabs. `value` is the API `?status=` param (null = all statuses).
 // Order mirrors the receipt lifecycle: everything → read → just uploaded → failed.
@@ -27,6 +28,8 @@ export default function TicketsTable() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(false);
+  // The ticket whose detail modal is open (null = closed).
+  const [selected, setSelected] = useState(null);
 
   // Tracks the in-flight request so a tab switch (or a new fetch) can cancel the
   // previous one. Without this, a late response from a prior filter could land
@@ -131,6 +134,9 @@ export default function TicketsTable() {
           <table className="w-full text-left text-sm">
             <thead className="border-b border-black/[.08] text-xs uppercase tracking-wide text-zinc-500 dark:border-white/[.145] dark:text-zinc-400">
               <tr>
+                <th className="px-4 py-3 font-medium">
+                  <span className="sr-only">Receipt</span>
+                </th>
                 <th className="px-4 py-3 font-medium">Merchant / RFC</th>
                 <th className="px-4 py-3 font-medium">Total</th>
                 <th className="px-4 py-3 font-medium">Date</th>
@@ -141,11 +147,25 @@ export default function TicketsTable() {
               {tickets.map((t) => {
                 const status = STATUS[t.status] || STATUS.uploaded;
                 const e = t.extracted || {};
+                const label = e.merchantNameGuess || e.rfcEmisor || "Receipt";
                 return (
-                  <tr key={t.id}>
+                  <tr
+                    key={t.id}
+                    onClick={() => setSelected(t)}
+                    className="cursor-pointer transition-colors hover:bg-black/[.03] dark:hover:bg-white/[.04]"
+                  >
+                    <td className="py-3 pl-4 pr-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- private auth-gated proxy, not optimizable by next/image */}
+                      <img
+                        src={`/api/user/tickets/${t.id}/image`}
+                        alt=""
+                        loading="lazy"
+                        className="h-12 w-12 shrink-0 rounded-lg border border-black/[.08] object-cover dark:border-white/[.145]"
+                      />
+                    </td>
                     <td className="px-4 py-3">
                       <p className="font-medium text-black dark:text-zinc-100">
-                        {e.merchantNameGuess || e.rfcEmisor || "Receipt"}
+                        {label}
                       </p>
                       {e.merchantNameGuess && e.rfcEmisor ? (
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -185,6 +205,10 @@ export default function TicketsTable() {
             {loadingMore ? "Loading…" : "Load more"}
           </button>
         </div>
+      ) : null}
+
+      {selected ? (
+        <TicketDetail ticket={selected} onClose={() => setSelected(null)} />
       ) : null}
     </div>
   );
