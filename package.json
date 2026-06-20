@@ -17,6 +17,7 @@
     "@aws-sdk/client-s3": "^3.1073.0",
     "@aws-sdk/s3-request-presigner": "^3.1073.0",
     "@google-cloud/vision": "^5.3.7",
+    "@trigger.dev/sdk": "^4.4.6",
     "mongodb": "^7.3.0",
     "mongoose": "^9.7.1",
     "next": "16.2.9",

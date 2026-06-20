@@ -40,6 +40,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# trigger.dev build output
+.trigger
+
 # ao local config + secrets (never commit)
 agent-orchestrator.yaml
 .env.local
