@@ -162,8 +162,10 @@ export const processInvoiceTask = task({
       await step("distill_recipe", distillRecipe);
     }
 
-    // 6. Form is ready; park for the (human-confirmed) submit step.
-    await step("ready_to_submit", readyToSubmit);
+    // 6. Form is ready; park for the (human-confirmed) submit step. This is the
+    //    terminal step that sets the final success status, so a failure here must
+    //    fail the run like every other step (don't report a half-done run as ok).
+    if (!(await step("ready_to_submit", readyToSubmit))) return fail();
 
     log.info("process-invoice finished", {
       ticketId,
