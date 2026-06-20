@@ -3,7 +3,7 @@ import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Company from "@/models/Company";
 import CsfSection from "@/components/CsfSection";
-import TicketUpload from "@/components/TicketUpload";
+import TicketsSection from "@/components/TicketsSection";
 
 // Reads the session and queries MongoDB — never prerender it.
 export const dynamic = "force-dynamic";
@@ -57,10 +57,10 @@ export default async function DashboardPage() {
             Tickets
           </h2>
           <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Snap a photo of a receipt or upload an image/PDF.
+            Snap a photo of a receipt or upload an image.
           </p>
           <div className="mt-4">
-            <TicketUpload />
+            <TicketsSection />
           </div>
         </section>
       </div>

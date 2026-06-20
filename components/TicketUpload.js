@@ -77,7 +77,23 @@ export default function TicketUpload({ onUploaded }) {
 
       const { ticketId } = await ticketRes.json();
 
-      toast.success("Ticket uploaded", { id: toastId });
+      // 4. Process it: Google Vision OCR → Haiku parse. The ticket is already
+      // saved, so an OCR failure is non-fatal — show a softer message and still
+      // refresh the list (the ticket appears as "Uploaded" and can be retried).
+      toast.loading("Reading ticket…", { id: toastId });
+      const ocrRes = await fetch(`/api/user/tickets/${ticketId}/ocr`, {
+        method: "POST",
+      });
+
+      if (ocrRes.ok) {
+        toast.success("Ticket read", { id: toastId });
+      } else {
+        const { error } = await ocrRes.json().catch(() => ({}));
+        toast.error(error || "Uploaded, but couldn't read the receipt", {
+          id: toastId,
+        });
+      }
+
       onUploaded?.(ticketId);
     } catch (error) {
       toast.error(error.message || "Something went wrong", { id: toastId });

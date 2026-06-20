@@ -9,6 +9,35 @@ const log = createLogger({ component: "api:tickets" });
 // This route reads the session and writes to MongoDB — never prerender it.
 export const dynamic = "force-dynamic";
 
+// GET /api/user/tickets
+// Returns the current user's tickets, newest first, for the dashboard list.
+export async function GET() {
+  try {
+    const session = await auth();
+    const userId = session?.user?.id;
+    if (!userId) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    await connectMongoose();
+
+    const docs = await Ticket.find({ userId })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    // toJSON plugin → id instead of _id, ISO dates, no __v.
+    const tickets = docs.map((d) => d.toJSON());
+
+    return NextResponse.json({ tickets });
+  } catch (error) {
+    log.error("Failed to list tickets:", error);
+    return NextResponse.json(
+      { error: "Failed to list tickets" },
+      { status: 500 }
+    );
+  }
+}
+
 // POST /api/user/tickets
 // Body: { imageKey }
 // Records a freshly uploaded receipt: the client has already PUT the image to R2
