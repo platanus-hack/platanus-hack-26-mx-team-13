@@ -6,6 +6,9 @@ import { defineConfig } from "@trigger.dev/sdk";
 // secret key (TRIGGER_SECRET_KEY) authenticates the SDK at runtime/deploy.
 export default defineConfig({
   project: process.env.TRIGGER_PROJECT_REF || "proj_REPLACE_ME",
+  // Pin the task runtime to Node 22 (repo requires it via engines.node + .nvmrc);
+  // Trigger.dev v4 otherwise defaults to Node 21.
+  runtime: "node-22",
   // Tasks live in ./trigger (e.g. trigger/processInvoice.js).
   dirs: ["./trigger"],
   // Default retry policy for tasks that don't set their own. The engine shell
