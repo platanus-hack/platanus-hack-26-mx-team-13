@@ -4,6 +4,7 @@ import { tasks } from "@trigger.dev/sdk";
 import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Ticket from "@/models/Ticket";
+import Company from "@/models/Company";
 import { INVOICE_STATUS } from "@/libs/engine/state";
 import { createLogger } from "@/libs/core/logger";
 
@@ -53,14 +54,36 @@ export async function POST(request, { params }) {
       );
     }
 
-    // The merchant RFC (rfcEmisor) is the key resolve_portal needs to find a
-    // portal; without it the run is guaranteed to fail fast with NO_URL. Reject up
-    // front instead of claiming the ticket and enqueueing a job that can only fail.
-    if (!ticket.extracted?.rfcEmisor) {
+    // resolve_portal needs SOME merchant identity to find a portal: the issuing RFC
+    // when the ticket prints it, else the merchant NAME — the common case, since most
+    // tickets don't carry the emisor RFC and resolve_portal matches by name then.
+    // Only reject when BOTH are missing (the one case guaranteed to fail with NO_URL);
+    // requiring the RFC here desynced this gate from resolve_portal and silently
+    // blocked every RFC-less ticket (e.g. Steren) before the run could even start.
+    if (!ticket.extracted?.rfcEmisor && !ticket.extracted?.merchantNameGuess) {
       return NextResponse.json(
         {
           error:
-            "Ticket has no merchant RFC (rfcEmisor) — cannot resolve a portal to invoice",
+            "Ticket has no merchant identity (neither RFC nor name) — cannot resolve a portal to invoice",
+        },
+        { status: 422 }
+      );
+    }
+
+    // Preflight the user's fiscal profile BEFORE claiming the ticket and opening
+    // an expensive billing Browserbase session. The fill step assembles billingData
+    // from Company.findOne({ userId, isActive: true }) (most recent first) and throws
+    // the non-human-resolvable MISSING_COMPANY_DATA deep in the run when there is no
+    // Company or it lacks an RFC. Mirror that lookup here and fail fast with a clear,
+    // user-actionable 422 instead.
+    const company = await Company.findOne({ userId, isActive: true })
+      .sort({ createdAt: -1 })
+      .lean();
+    if (!company || !company.rfc) {
+      return NextResponse.json(
+        {
+          error:
+            "No tienes una constancia de situación fiscal (CSF) válida cargada — súbela antes de facturar.",
         },
         { status: 422 }
       );

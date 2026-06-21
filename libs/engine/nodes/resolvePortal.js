@@ -20,8 +20,13 @@
 // terminal and NOT human-resolvable — a person on the live browser can't conjure
 // a portal that doesn't exist.
 //
+// Discovery degrades gracefully: a missing FIRECRAWL_API_KEY or a Firecrawl
+// search outage doesn't crash the run — it just yields no discovered URL, which
+// the resolver turns into the same clean terminal NO_URL.
+//
 // Env (see .env.example):
 //   FIRECRAWL_API_KEY - Firecrawl API key for the cold-discovery web search.
+//                       Optional: when unset, discovery is skipped (cache-only).
 
 import { INVOICE_STATUS } from "@/libs/engine/state";
 import { ENGINE_ERRORS } from "@/libs/engine/errorTypes";
@@ -29,6 +34,7 @@ import { engineError } from "@/libs/engine/node";
 import connectMongoose from "@/libs/core/mongoose";
 import KnownMerchant from "@/models/KnownMerchant";
 import MerchantRecipe from "@/models/MerchantRecipe";
+import Ticket from "@/models/Ticket";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:resolve-portal" });
@@ -75,6 +81,69 @@ export async function resolvePortal(state) {
   }
 
   await connectMongoose();
+
+  // 0. QR shortcut — many MX tickets print a QR whose payload IS the facturación
+  //    portal URL. When OCR ingestion decoded one it persisted it on the ticket
+  //    (extracted.portalUrl + extracted.urlSource:"qr"); that URL is authoritative —
+  //    the merchant printed it themselves — so prefer it and SKIP the
+  //    KnownMerchant/Firecrawl discovery entirely.
+  //
+  //    The QR url can reach this node two ways: directly on `state` (if the run
+  //    shell ever seeds it) or, the actual path today, on the persisted
+  //    Ticket.extracted (the OCR route writes it there — NOT on invoice, which would
+  //    seed a "queued" status and block the run start-gate, #104). Read state first,
+  //    then fall back to the ticket so this stays robust to the state shape received.
+  const qrPortalUrl = await resolveQrPortalUrl(state);
+  if (qrPortalUrl) {
+    // Stable registry key (same scheme as discovery): RFC when present, else the
+    // normalized name uppercased.
+    const merchantKey = rfcEmisor
+      ? rfcEmisor.toUpperCase()
+      : normalizeName(merchantName).toUpperCase();
+
+    // Network effect: persist the QR url to KnownMerchant so a later run for the
+    // same merchant whose ticket has NO QR still cache-hits. Best-effort — a write
+    // failure must not stop a run that already has its URL from the QR.
+    if (merchantKey) {
+      const data = { invoiceUrl: qrPortalUrl };
+      if (merchantName) {
+        data.merchantName = merchantName;
+        data.normalizedName = normalizeName(merchantName);
+      }
+      try {
+        await KnownMerchant.upsert(merchantKey, data);
+      } catch (err) {
+        log.warn("Could not persist QR portal to KnownMerchant", {
+          merchantKey,
+          error: String(err?.message || err),
+        });
+      }
+    }
+
+    // Load any active recipe for this merchant key, same as the other paths.
+    const activeRecipe = merchantKey
+      ? await MerchantRecipe.findActiveByRfc(merchantKey)
+      : null;
+    const recipeFields = activeRecipe
+      ? { recipeId: String(activeRecipe._id), recipeVersion: activeRecipe.version }
+      : {};
+
+    log.info("Portal resolved from ticket QR", {
+      portalUrl: qrPortalUrl,
+      merchantKey: merchantKey || null,
+    });
+    return {
+      status: INVOICE_STATUS.RESOLVING_PORTAL,
+      portalUrl: qrPortalUrl,
+      urlSource: "qr",
+      ...(merchantKey ? { rfcEmisor: merchantKey } : {}),
+      merchantName: merchantName || null,
+      ...recipeFields,
+      detail: `QR hit — ${qrPortalUrl}${
+        activeRecipe ? ` (recipe v${activeRecipe.version})` : ""
+      }`,
+    };
+  }
 
   // 1. Cache — resolve the merchant from the KnownMerchant registry: by RFC (exact,
   //    when the ticket carries one), else by normalized name (the common case). A hit
@@ -172,9 +241,10 @@ export async function resolvePortal(state) {
  * Discover a merchant's facturación portal via web search (Firecrawl), returning
  * the best candidate URL or null when nothing convincing is found.
  *
- * Requires FIRECRAWL_API_KEY; a missing key is a configuration error (throws),
- * not a "not found" — so misconfiguration fails loudly instead of masquerading
- * as a merchant with no portal.
+ * Discovery DEGRADES GRACEFULLY: a missing FIRECRAWL_API_KEY or a Firecrawl
+ * search outage/error returns null (logged as a warning) instead of throwing.
+ * The caller turns a null into a clean terminal NO_URL — a misconfigured or
+ * down search becomes "no portal found", not an opaque unhandled crash mid-run.
  *
  * @param {{ rfcEmisor: string, merchantName?: string|null }} args
  * @returns {Promise<string|null>}
@@ -182,13 +252,31 @@ export async function resolvePortal(state) {
 async function discoverPortal({ rfcEmisor, merchantName }) {
   const apiKey = process.env.FIRECRAWL_API_KEY;
   if (!apiKey) {
-    throw new Error(
-      "Firecrawl is not configured — set FIRECRAWL_API_KEY in .env.local"
+    // Degrade, don't crash: no discovery backend → report nothing found so the
+    // caller surfaces a clean NO_URL (cache-only runs still work).
+    log.warn(
+      "Firecrawl is not configured (FIRECRAWL_API_KEY missing) — skipping discovery, returning null",
+      { rfcEmisor }
     );
+    return null;
   }
 
   const query = buildQuery({ rfcEmisor, merchantName });
-  const results = await firecrawlSearch(apiKey, query);
+
+  // A Firecrawl outage / non-2xx is transient infra, not a merchant decision —
+  // swallow it to null so the run ends in a clean NO_URL instead of an
+  // unhandled throw escaping the node.
+  let results;
+  try {
+    results = await firecrawlSearch(apiKey, query);
+  } catch (err) {
+    log.warn("Firecrawl search failed — degrading to no portal found", {
+      rfcEmisor,
+      query,
+      error: String(err?.message || err),
+    });
+    return null;
+  }
 
   if (!results.length) {
     log.warn("Portal discovery returned no results", { rfcEmisor, query });
@@ -353,6 +441,54 @@ function normalizeName(name) {
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * Find a QR-sourced facturación portal URL for this run, if OCR ingestion decoded
+ * one. Checks the state first (forward-compatible, if the run shell ever seeds it)
+ * then falls back to the persisted Ticket.extracted — where the OCR route writes the
+ * QR portal (extracted.portalUrl/urlSource:"qr"; it must NOT live on invoice, which
+ * would seed a "queued" status and block the run start-gate — see #104). Only a
+ * urlSource of "qr" counts (a cache / research url is resolve_portal's own output).
+ *
+ * Best-effort: a Ticket read failure (or no ticketId) returns null so the resolver
+ * falls through to normal cache/discovery rather than crashing.
+ *
+ * @param {import("@/libs/engine/state").InvoiceState} state
+ * @returns {Promise<string|null>}
+ */
+async function resolveQrPortalUrl(state) {
+  // 1. Already on state (e.g. a future run shell that seeds the QR fields).
+  if (state?.urlSource === "qr" && isHttpUrl(state.portalUrl)) {
+    return state.portalUrl.trim();
+  }
+
+  // 2. Fall back to the persisted ticket — where the OCR route actually wrote it.
+  if (!state?.ticketId) return null;
+  try {
+    const ticket = await Ticket.findById(state.ticketId).select("extracted").lean();
+    const extracted = ticket?.extracted;
+    if (extracted?.urlSource === "qr" && isHttpUrl(extracted.portalUrl)) {
+      return extracted.portalUrl.trim();
+    }
+  } catch (err) {
+    log.warn("Could not read ticket for QR portal lookup", {
+      ticketId: state.ticketId,
+      error: String(err?.message || err),
+    });
+  }
+  return null;
+}
+
+/** True when value is a non-empty http(s) URL. */
+function isHttpUrl(value) {
+  if (!value || typeof value !== "string") return false;
+  try {
+    const u = new URL(value.trim());
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 export default resolvePortal;
