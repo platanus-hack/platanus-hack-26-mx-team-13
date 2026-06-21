@@ -44,8 +44,9 @@ import { engineError } from "./node.js";
  * @property {number|null} total - Grand total.
  * @property {number|null} subtotal - Subtotal before tax.
  * @property {Date|null} date - Purchase date (formatting is the fill step's concern).
- * @property {string|null} sucursal - Branch identifier; not yet extracted → null for now.
- * @property {string|null} terminal - Terminal/POS identifier; not yet extracted → null for now.
+ * @property {string|null} sucursal - Branch/store identifier from the receipt (lookup gate).
+ * @property {string|null} puntoVenta - Register/checkout/POS number from the receipt (lookup gate).
+ * @property {string|null} terminal - Terminal identifier; not yet extracted → null for now.
  */
 
 // The closed set of recipe dataKeys — exactly the keys of a BillingData object.
@@ -129,8 +130,9 @@ export async function assembleBillingData(ticketId, userId) {
     total: extracted.total ?? null,
     subtotal: extracted.subtotal ?? null,
     date: extracted.date ?? null,
-    // Not yet extracted from receipts; surfaced as null.
     sucursal: extracted.sucursal ?? null,
+    puntoVenta: extracted.puntoVenta ?? null,
+    // Not yet extracted from receipts; surfaced as null.
     terminal: extracted.terminal ?? null,
   };
 }
@@ -148,4 +150,22 @@ export function getBillingValue(billingData, dataKey) {
   if (!billingData || !dataKey) return null;
   const value = billingData[dataKey];
   return value === undefined ? null : value;
+}
+
+/**
+ * Presence map of an assembled billingData — `{ dataKey: boolean }`, true when the
+ * value is non-null. Safe to log: it reveals WHICH fiscal/receipt fields the fill
+ * step has, never the values themselves. Use this in trigger.log to confirm the
+ * agent is driven by the real OCR + CSF data (and to spot missing fields like
+ * cfdiUsage) without leaking PII.
+ *
+ * @param {BillingData} billingData
+ * @returns {Record<string, boolean>}
+ */
+export function redactBillingData(billingData) {
+  const out = {};
+  for (const k of Object.keys(billingData || {})) {
+    out[k] = billingData[k] != null;
+  }
+  return out;
 }

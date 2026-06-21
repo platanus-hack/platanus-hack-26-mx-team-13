@@ -27,6 +27,10 @@ const extractedSchema = z.object({
   subtotal: z.number().nullable(),
   date: z.string().nullable(),
   merchantNameGuess: z.string().nullable(),
+  // Ticket-lookup fields: most MX portals gate the fiscal form behind a lookup that
+  // asks for these (branch + POS + folio + total + date) to find the purchase.
+  sucursal: z.string().nullable(),
+  puntoVenta: z.string().nullable(),
 });
 
 // JSON Schema mirror of extractedSchema, handed to Claude as a tool definition so
@@ -65,6 +69,16 @@ const EXTRACT_TOOL = {
         description:
           "Best guess at the merchant/store name. A hint only — not used as a key.",
       },
+      sucursal: {
+        type: ["string", "null"],
+        description:
+          "Branch / store identifier of the purchase: a branch name and/or store number, e.g. 'ALSUPER PLUS BOSQUES', 'Sucursal Centro', 'Tienda #058'. Prefer the most specific branch label printed. null if not present.",
+      },
+      puntoVenta: {
+        type: ["string", "null"],
+        description:
+          "Point-of-sale / checkout identifier: the register, lane, terminal or 'punto de venta' number, e.g. '16' from 'Punto de Venta: 16', 'Caja 3'. Digits only when it is a number. null if not present.",
+      },
     },
     required: [
       "rfcEmisor",
@@ -73,6 +87,8 @@ const EXTRACT_TOOL = {
       "subtotal",
       "date",
       "merchantNameGuess",
+      "sucursal",
+      "puntoVenta",
     ],
     additionalProperties: false,
   },
@@ -86,7 +102,10 @@ Rules:
 - rfcEmisor is the merchant's RFC (12-13 alphanumeric chars, e.g. "XAXX010101000"). Only fill it if an RFC clearly appears; do not derive it from the merchant name.
 - total and subtotal are plain numbers (strip "$", "MXN", thousands separators).
 - date must be ISO 8601 (YYYY-MM-DD, optionally with time).
-- merchantNameGuess is a best-effort store name and is a hint only.`;
+- merchantNameGuess is a best-effort store name and is a hint only.
+- sucursal is the branch/store identifier of the purchase (branch name and/or store number, e.g. "ALSUPER PLUS BOSQUES", "Tienda #058"). This is what a portal's "Sucursal/Tienda" lookup field needs.
+- puntoVenta is the register/checkout/terminal number (e.g. "16" from "Punto de Venta: 16", "Caja 3"). Keep it as printed (digits only when numeric).
+- For sucursal and puntoVenta: only fill them if clearly printed; never invent them.`;
 
 /**
  * Parse raw receipt OCR text into structured ticket fields using Claude Haiku.

@@ -53,14 +53,17 @@ export async function POST(request, { params }) {
       );
     }
 
-    // The merchant RFC (rfcEmisor) is the key resolve_portal needs to find a
-    // portal; without it the run is guaranteed to fail fast with NO_URL. Reject up
-    // front instead of claiming the ticket and enqueueing a job that can only fail.
-    if (!ticket.extracted?.rfcEmisor) {
+    // resolve_portal needs SOME merchant identity to find a portal: the issuing RFC
+    // when the ticket prints it, else the merchant NAME — the common case, since most
+    // tickets don't carry the emisor RFC and resolve_portal matches by name then.
+    // Only reject when BOTH are missing (the one case guaranteed to fail with NO_URL);
+    // requiring the RFC here desynced this gate from resolve_portal and silently
+    // blocked every RFC-less ticket (e.g. Steren) before the run could even start.
+    if (!ticket.extracted?.rfcEmisor && !ticket.extracted?.merchantNameGuess) {
       return NextResponse.json(
         {
           error:
-            "Ticket has no merchant RFC (rfcEmisor) — cannot resolve a portal to invoice",
+            "Ticket has no merchant identity (neither RFC nor name) — cannot resolve a portal to invoice",
         },
         { status: 422 }
       );

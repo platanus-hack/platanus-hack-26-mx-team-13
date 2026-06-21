@@ -27,6 +27,7 @@ export const BILLING_DATA_KEYS = Object.freeze([
   "subtotal",
   "date",
   "sucursal",
+  "puntoVenta",
   "terminal",
 ]);
 

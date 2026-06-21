@@ -16,6 +16,9 @@ const extractedSchema = new mongoose.Schema(
     subtotal: { type: Number, default: null },
     date: { type: Date, default: null },
     merchantNameGuess: { type: String, default: null },
+    // Ticket-lookup fields most MX portals require before showing the fiscal form.
+    sucursal: { type: String, default: null },
+    puntoVenta: { type: String, default: null },
   },
   { _id: false }
 );

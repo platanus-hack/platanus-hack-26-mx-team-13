@@ -11,14 +11,19 @@
 //     PAGE_BROKEN. Login is only a blocker when a password field is present — a
 //     page that already shows invoice fields with no password is NOT a login wall.
 //
-//   Phase 2 — DOM real-form check (free). If the landing page already IS the form
-//     (≥2 visible inputs + a fiscal keyword + no password) we're done: formReached,
-//     reached "direct", with zero AI spend.
+//   Phase 2 — DOM form check (free). If the landing page already IS a fillable form
+//     we're done: formReached, reached "direct", zero AI spend. "Fillable form" means
+//     EITHER the fiscal form (≥2 inputs + a fiscal keyword + no password) OR the
+//     ticket-lookup gate that precedes it on most MX portals (≥2 inputs + a lookup
+//     keyword like folio/sucursal/punto de venta/total + no password). We stop on the
+//     gate too — the data-aware fill step enters the real ticket values into it.
 //
 //   Phase 3 — AI navigation. A Stagehand operator agent (Sonnet plans, Haiku
 //     executes) clicks through "Facturar/Generar factura" flows, wizards, modals
-//     and new tabs to reach the form (maxSteps 10, 90s budget). It emits a token
-//     (LOGIN_REQUIRED / CAPTCHA_DETECTED / PAGE_BROKEN) when it hits a wall.
+//     and new tabs to reach a form (maxSteps 10, 90s budget). It navigates by
+//     CLICKING ONLY — it never types into fields (typing here copies the portal's
+//     sample-ticket example; the real data is entered later by the fill step). It
+//     emits a token (LOGIN_REQUIRED / CAPTCHA_DETECTED / PAGE_BROKEN) at a wall.
 //
 // Final verification is ALWAYS a DOM real-form check across EVERY open tab — the
 // agent's word is never trusted on its own, and the form may have opened in a new
@@ -57,6 +62,29 @@ const FISCAL_KEYWORDS = [
   "uso de cfdi",
   "codigo postal",
   "folio",
+];
+
+// Ticket-lookup-gate signal: most MX portals don't show the fiscal form first — they
+// gate it behind a lookup that asks for the purchase's identifying data (branch, POS,
+// folio, total, date) to find the ticket. That gate IS a reachable, fillable form: we
+// must STOP on it and let the (data-aware, deterministic) fill step enter the real
+// ticket values — never let the navigation agent type into it, or it copies the
+// sample-ticket EXAMPLE the portal renders as a guide.
+const LOOKUP_KEYWORDS = [
+  "folio",
+  "punto de venta",
+  "sucursal",
+  "tienda",
+  "ticket",
+  "importe",
+  "total de la compra",
+  "total de compra",
+  "total de su compra",
+  "fecha de compra",
+  "fecha de emision",
+  "terminal",
+  "caja",
+  "transaccion",
 ];
 
 // Captcha intent in page text (the widget check in analyzePage covers the markup).
@@ -117,18 +145,23 @@ const BLOCKER_TOKENS = [
 // never fill the fiscal fields or submit (a later node + a human own that).
 const REACH_INSTRUCTION = [
   "You are on a Mexican merchant's online invoicing (facturación / CFDI) portal.",
-  "Your ONLY goal is to REACH the fiscal invoice form — the page whose fields ask",
-  "for things like RFC, razón social, régimen fiscal, uso de CFDI, código postal.",
-  "Do whatever navigation is required to get there:",
+  "Your ONLY goal is to REACH a data-entry form so a later step can fill it. The form",
+  "is EITHER a ticket-lookup form (fields like Sucursal/Tienda, Folio, Punto de Venta,",
+  "Fecha, Total/Importe) OR the fiscal form (RFC, razón social, régimen fiscal, uso de",
+  "CFDI, código postal). Reaching EITHER one means you are done.",
+  "Navigate ONLY by clicking — never by typing:",
   "- Accept or close cookie banners, pop-ups and modal dialogs.",
-  "- Click buttons or links such as 'Facturar', 'Generar factura', 'Facturación',",
+  "- Click buttons, links or tabs such as 'Facturar', 'Generar factura', 'Facturación',",
   "  'Solicitar factura' or 'Facturación electrónica'.",
-  "- Complete a short gating wizard/lookup (e.g. entering a folio, ticket number or",
-  "  RFC) ONLY when it is required to advance toward the form.",
   "- Follow links even when they open in a new browser tab.",
-  "STOP as soon as the fiscal form fields are visible. Do NOT fill the fiscal form,",
-  "and do NOT submit or generate the invoice.",
-  "If you cannot reach the form because the portal demands signing in, reply with the",
+  "ABSOLUTE RULE: do NOT type into or fill ANY input field, and do NOT click a search/",
+  "submit/'Facturar' button that would submit a form. The portal often shows a SAMPLE",
+  "ticket as a guide — never copy its values. Entering data is a later step's job, with",
+  "the user's real ticket data; if you type here you would enter the wrong (example)",
+  "values.",
+  "STOP as soon as a form with input fields (lookup OR fiscal) is visible. Do not fill",
+  "or submit anything.",
+  "If you cannot reach a form because the portal demands signing in, reply with the",
   "single token LOGIN_REQUIRED. If a captcha blocks you, reply CAPTCHA_DETECTED. If",
   "the page is broken or shows a server error, reply PAGE_BROKEN.",
 ].join("\n");
@@ -145,6 +178,12 @@ function normalizeText(value) {
 function hasFiscalKeyword(text) {
   const haystack = normalizeText(text);
   return FISCAL_KEYWORDS.some((k) => haystack.includes(k));
+}
+
+/** Whether the page text carries at least one ticket-lookup-gate keyword. */
+function hasLookupKeyword(text) {
+  const haystack = normalizeText(text);
+  return LOOKUP_KEYWORDS.some((k) => haystack.includes(k));
 }
 
 /** Best-effort current URL of a page (a closed/crashed page throws). */
@@ -183,7 +222,7 @@ async function analyzePageReady(page, { timeoutMs = 9000, intervalMs = 600 } = {
   let signals = await analyzePage(page);
   while (
     Date.now() < deadline &&
-    !isRealForm(signals) &&
+    !isReachableForm(signals) &&
     !classifyBlocker(signals)
   ) {
     await sleep(intervalMs);
@@ -327,6 +366,29 @@ function isRealForm(signals) {
   return hasFiscalKeyword(signals.textSnippet);
 }
 
+/**
+ * Whether a page's DOM signals describe a ticket-lookup gate: ≥2 data-entry inputs,
+ * no password, and a lookup keyword (folio / sucursal / punto de venta / total …).
+ * This is the data-entry screen that precedes the fiscal form on most MX portals.
+ */
+function isLookupGate(signals) {
+  if (!signals) return false;
+  if (signals.hasPassword) return false;
+  if (signals.visibleInputCount < 2) return false;
+  return hasLookupKeyword(signals.textSnippet);
+}
+
+/**
+ * Whether a page is a reachable, fillable form the fill step can take over: either
+ * the fiscal CFDI form OR the ticket-lookup gate in front of it. reach_form's job is
+ * to land us on EITHER and then stop — the deterministic, data-aware fill step enters
+ * the real values for whichever it is. (The navigation agent must NEVER type into
+ * these; it would copy the sample-ticket example the portal shows.)
+ */
+function isReachableForm(signals) {
+  return isRealForm(signals) || isLookupGate(signals);
+}
+
 /** Every open tab/page in the session, falling back to the single active page. */
 function collectPages(stagehand) {
   let pages = [];
@@ -351,7 +413,7 @@ async function findFormPage(pages) {
   for (const page of pages) {
     // Poll per tab — the form may still be rendering when the agent stops.
     const signals = await analyzePageReady(page);
-    if (isRealForm(signals)) return { page, signals };
+    if (isReachableForm(signals)) return { page, signals };
   }
   return null;
 }
@@ -499,7 +561,7 @@ export async function reachForm(state) {
     // resuélvelo", or stray error/404 wording). Only a real captcha WIDGET genuinely
     // blocks a form that's right there; otherwise defer to the Phase 2 real-form check.
     const formDespiteText =
-      isRealForm(landingSignals) && !landingSignals?.hasCaptchaWidget;
+      isReachableForm(landingSignals) && !landingSignals?.hasCaptchaWidget;
     if (landingBlocker && !formDespiteText) {
       throw engineError(
         `Portal blocked before the form (${landingBlocker})`,
@@ -507,13 +569,19 @@ export async function reachForm(state) {
       );
     }
 
-    // Phase 2 — DOM real-form check (free). The landing page already IS the form.
-    if (isRealForm(landingSignals)) {
-      log.info("reach_form: form reached directly", { ticketId: state.ticketId });
+    // Phase 2 — DOM form check (free). The landing page already IS a fillable form
+    // (the fiscal form, or the ticket-lookup gate in front of it). Stop here and let
+    // the data-aware fill step enter the real values.
+    if (isReachableForm(landingSignals)) {
+      const kind = isRealForm(landingSignals) ? "fiscal form" : "ticket-lookup form";
+      log.info("reach_form: form reached directly", {
+        ticketId: state.ticketId,
+        kind,
+      });
       return {
         status: INVOICE_STATUS.REACHING_FORM,
         formReached: true,
-        detail: `reached the invoicing form directly — ${safeUrl(page) || "form visible"}`,
+        detail: `reached the ${kind} directly — ${safeUrl(page) || "form visible"}`,
       };
     }
 
