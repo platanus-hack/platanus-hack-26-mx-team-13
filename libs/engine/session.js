@@ -36,6 +36,22 @@ const SESSION_TIMEOUT_SECONDS = 3600;
 // for higher-fidelity extraction).
 const ENGINE_MODEL = process.env.ENGINE_LLM_MODEL || "anthropic/claude-haiku-4-5";
 
+// Options shared by every Stagehand constructor. The critical pieces are about
+// logging: Stagehand's default logger boots a pino + pino-pretty transport that
+// isn't resolvable in a bundled/minimal runtime (the deployed Trigger.dev task),
+// where init() throws "unable to determine transport target for pino-pretty"
+// instead of falling back. Passing an external `logger` forces Stagehand's pino
+// backend off (it only uses pino when no external logger is given); `disablePino`
+// is belt-and-suspenders. Stagehand's lines then flow through our console logger.
+const STAGEHAND_BASE_OPTIONS = {
+  model: ENGINE_MODEL,
+  disablePino: true,
+  logger: (line) => {
+    const level = line?.level === 0 ? "error" : line?.level === 2 ? "debug" : "info";
+    log[level](line?.message ?? "");
+  },
+};
+
 /** Whether to drive a local headed browser instead of Browserbase (dev only). */
 function isLocal() {
   return process.env.ENGINE_LOCAL_BROWSER === "true";
@@ -119,13 +135,13 @@ export async function createSession({ ticketId } = {}) {
 
   const stagehand = local
     ? new Stagehand({
+        ...STAGEHAND_BASE_OPTIONS,
         env: "LOCAL",
-        model: ENGINE_MODEL,
         localBrowserLaunchOptions: { headless: false },
       })
     : new Stagehand({
+        ...STAGEHAND_BASE_OPTIONS,
         env: "BROWSERBASE",
-        model: ENGINE_MODEL,
         apiKey: requireEnv("BROWSERBASE_API_KEY"),
         projectId: requireEnv("BROWSERBASE_PROJECT_ID"),
         browserbaseSessionCreateParams: {
@@ -164,8 +180,8 @@ export async function reconnectSession(sessionIdOrConnectUrl) {
   const sessionId = extractSessionId(sessionIdOrConnectUrl);
 
   const stagehand = new Stagehand({
+    ...STAGEHAND_BASE_OPTIONS,
     env: "BROWSERBASE",
-    model: ENGINE_MODEL,
     apiKey: requireEnv("BROWSERBASE_API_KEY"),
     projectId: requireEnv("BROWSERBASE_PROJECT_ID"),
     browserbaseSessionID: sessionId,
