@@ -158,6 +158,12 @@ export async function reconnectSession(sessionIdOrConnectUrl) {
     apiKey: requireEnv("BROWSERBASE_API_KEY"),
     projectId: requireEnv("BROWSERBASE_PROJECT_ID"),
     browserbaseSessionID: sessionId,
+    // keepAlive so stagehand.close() only drops the LOCAL CDP handle. Without it
+    // Stagehand defaults keepAlive=false and close() calls apiClient.end(), which
+    // TERMINATES the shared Browserbase session — stranding the next node (AI
+    // fallback / later node / HITL) that must reconnect to the SAME session.
+    // Mirrors createSession, which keeps the session alive the same way.
+    keepAlive: true,
   });
 
   await stagehand.init();
