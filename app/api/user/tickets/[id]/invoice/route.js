@@ -4,6 +4,7 @@ import { tasks } from "@trigger.dev/sdk";
 import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Ticket from "@/models/Ticket";
+import Company from "@/models/Company";
 import { INVOICE_STATUS } from "@/libs/engine/state";
 import { createLogger } from "@/libs/core/logger";
 
@@ -64,6 +65,25 @@ export async function POST(request, { params }) {
         {
           error:
             "Ticket has no merchant identity (neither RFC nor name) — cannot resolve a portal to invoice",
+        },
+        { status: 422 }
+      );
+    }
+
+    // Preflight the user's fiscal profile BEFORE claiming the ticket and opening
+    // an expensive billing Browserbase session. The fill step assembles billingData
+    // from Company.findOne({ userId, isActive: true }) (most recent first) and throws
+    // the non-human-resolvable MISSING_COMPANY_DATA deep in the run when there is no
+    // Company or it lacks an RFC. Mirror that lookup here and fail fast with a clear,
+    // user-actionable 422 instead.
+    const company = await Company.findOne({ userId, isActive: true })
+      .sort({ createdAt: -1 })
+      .lean();
+    if (!company || !company.rfc) {
+      return NextResponse.json(
+        {
+          error:
+            "No tienes una constancia de situación fiscal (CSF) válida cargada — súbela antes de facturar.",
         },
         { status: 422 }
       );
