@@ -101,6 +101,12 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: "Ticket not found" }, { status: 404 });
     }
 
+    // A legacy/ghost ticket may have no stored image. Return a clean 404 (broken
+    // thumbnail) instead of letting getObjectBuffer throw a 500.
+    if (!ticket.imageKey) {
+      return NextResponse.json({ error: "Ticket has no image" }, { status: 404 });
+    }
+
     const buffer = await getObjectBuffer(ticket.imageKey);
 
     const contentType =
