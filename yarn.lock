@@ -1919,7 +1919,7 @@
     zod-error "1.5.0"
     zod-validation-error "^1.5.0"
 
-"@trigger.dev/sdk@^4.4.6":
+"@trigger.dev/sdk@4.4.6":
   version "4.4.6"
   resolved "https://registry.yarnpkg.com/@trigger.dev/sdk/-/sdk-4.4.6.tgz#ddb921bef663f8b1468574245cb3444ddf28b2db"
   integrity sha512-FAC5/oES4dClLWlLGvnuNUlhfzWXDA6ResxB7B6/2UohSdxn3yWt9uOtjEL434JiN0xNUCiSAN8KTP1azpOgBg==

@@ -1,11 +1,11 @@
 import { defineConfig } from "@trigger.dev/sdk";
 
 // Trigger.dev project configuration. The project ref ties this repo to a project
-// in the Trigger.dev dashboard — grab it from the project's Settings page and set
-// TRIGGER_PROJECT_REF in .env.local (or replace the placeholder below). The
-// secret key (TRIGGER_SECRET_KEY) authenticates the SDK at runtime/deploy.
+// in the Trigger.dev dashboard. It's not a secret (the secret key authenticates),
+// so it's hardcoded as the default — `deploy` doesn't load .env.local, so relying
+// on an env var there fails. TRIGGER_PROJECT_REF can still override it for dev.
 export default defineConfig({
-  project: process.env.TRIGGER_PROJECT_REF || "proj_REPLACE_ME",
+  project: process.env.TRIGGER_PROJECT_REF || "proj_twbtqiohxlaapocvwbcj",
   // Pin the task runtime to Node 22 (repo requires it via engines.node + .nvmrc);
   // Trigger.dev v4 otherwise defaults to Node 21.
   runtime: "node-22",
