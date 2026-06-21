@@ -1,12 +1,16 @@
 // resolve_portal — figure out which CFDI portal to drive for this merchant.
 //
-// The merchant identity (rfcEmisor + a name guess) comes from the ticket OCR;
-// the ticket itself almost never carries the facturación URL. This node resolves
-// rfcEmisor → portal URL in two tiers:
+// The merchant identity (a name guess + sometimes the issuing RFC) comes from the
+// ticket OCR; the ticket itself almost never carries the facturación URL — and most
+// tickets don't print the emisor RFC either, so the merchant NAME is the primary
+// join key (the RFC is used when it happens to be present). This node resolves the
+// merchant → portal URL in two tiers:
 //
-//   1. Cache — KnownMerchant is the RFC→portal registry, the network-effect
-//      asset. A hit is instant and free: portalUrl comes straight from the
-//      registry and urlSource = "cache".
+//   1. Cache — KnownMerchant is the merchant→portal registry (matched by RFC when
+//      present, else by normalized name), the network-effect asset. A hit is instant
+//      and free: portalUrl comes straight from the registry and urlSource = "cache".
+//      The resolved registry RFC is canonicalized onto state so the recipe lookup +
+//      distill stay keyed consistently even when the match was by name.
 //   2. Cold discovery — no registry entry yet, so search the web (Firecrawl) for
 //      the merchant's facturación portal, persist the winner to KnownMerchant so
 //      every later run for this RFC is a cache hit, and report urlSource =
@@ -57,72 +61,99 @@ const DENY_HOSTS = [
  * @returns {Promise<Partial<import("@/libs/engine/state").InvoiceState> & { detail?: string }>}
  */
 export async function resolvePortal(state) {
-  const rfcEmisor = state.rfcEmisor;
-  if (!rfcEmisor) {
-    // No merchant key → nothing to resolve against. Terminal.
+  const rfcEmisor = (state.rfcEmisor || "").trim();
+  const merchantName = (state.merchantName || "").trim();
+
+  // A run needs SOME merchant identity. The issuing RFC is the ideal key, but most
+  // tickets don't print it — so the merchant NAME is the primary join key, and a
+  // ticket with neither can't be resolved.
+  if (!rfcEmisor && !merchantName) {
     throw engineError(
-      "No merchant RFC on the ticket — cannot resolve a portal",
+      "No merchant identity on the ticket (neither RFC nor name) — cannot resolve a portal",
       ENGINE_ERRORS.NO_URL.code
     );
   }
 
   await connectMongoose();
 
-  // Arm the deterministic replay path: the shell branches on state.recipeId, so a
-  // merchant with an active recipe must surface it here (we are already RFC-keyed
-  // and DB-connected) — otherwise every run, recipe or not, falls through to the
-  // costlier AI fill and the replay savings stay dead. We only carry the recipe's
-  // identity (id + version) as the gate; recipeUsed stays false until a replay
-  // actually succeeds (replay_recipe sets it), and replay_recipe re-loads the
-  // recipe itself, so a recipe that is deactivated before replay still falls back.
-  const activeRecipe = await MerchantRecipe.findActiveByRfc(rfcEmisor);
-  const recipeFields = activeRecipe
-    ? { recipeId: String(activeRecipe._id), recipeVersion: activeRecipe.version }
-    : {};
+  // 1. Cache — resolve the merchant from the KnownMerchant registry: by RFC (exact,
+  //    when the ticket carries one), else by normalized name (the common case). A hit
+  //    is instant and free.
+  let known = null;
+  let matchedBy = null;
+  if (rfcEmisor) {
+    known = await KnownMerchant.findByRfc(rfcEmisor);
+    if (known) matchedBy = "rfc";
+  }
+  if (!known && merchantName) {
+    known = await KnownMerchant.findByName(merchantName);
+    if (known) matchedBy = "name";
+  }
 
-  // 1. Cache: a known merchant resolves instantly from the registry.
-  const known = await KnownMerchant.findByRfc(rfcEmisor);
   if (known?.invoiceUrl) {
+    // Canonicalize the merchant key to the registry's RFC so the recipe lookup +
+    // distill stay keyed consistently — even when we matched purely by name and the
+    // ticket carried no RFC. The shell branches on recipeId; recipeUsed stays false
+    // until replay_recipe actually succeeds, and replay re-loads the recipe, so one
+    // deactivated before replay still falls back to AI.
+    const canonicalRfc = known.rfcEmisor;
+    const activeRecipe = await MerchantRecipe.findActiveByRfc(canonicalRfc);
+    const recipeFields = activeRecipe
+      ? { recipeId: String(activeRecipe._id), recipeVersion: activeRecipe.version }
+      : {};
+
     log.info("Portal resolved from cache", {
-      rfcEmisor,
+      rfcEmisor: canonicalRfc,
+      matchedBy,
       portalUrl: known.invoiceUrl,
     });
     return {
       status: INVOICE_STATUS.RESOLVING_PORTAL,
       portalUrl: known.invoiceUrl,
       urlSource: "cache",
+      rfcEmisor: canonicalRfc,
+      merchantName: known.merchantName || merchantName || null,
       ...recipeFields,
-      detail: `cache hit — ${known.invoiceUrl}${
+      detail: `cache hit (by ${matchedBy}) — ${known.invoiceUrl}${
         activeRecipe ? ` (recipe v${activeRecipe.version})` : ""
       }`,
     };
   }
 
-  // 2. Cold discovery: search the web for this merchant's facturación portal.
-  const discovered = await discoverPortal({
-    rfcEmisor,
-    merchantName: state.merchantName,
-  });
+  // 2. Cold discovery — no registry entry yet. Search the web for the merchant's
+  //    facturación portal and persist it under a stable key (the RFC when present,
+  //    else a name-derived key) so every later run for this merchant is a cache hit.
+  const discovered = await discoverPortal({ rfcEmisor, merchantName });
 
   if (discovered) {
-    // Persist so this RFC is a cache hit on every later run (the network effect).
-    // Only write fields we actually have, so we never clobber an existing
-    // merchant name with null.
+    // Stable registry key: the RFC when we have it, else the normalized name
+    // uppercased (the rfcEmisor field is the merchant key, not necessarily a real RFC).
+    const merchantKey = rfcEmisor
+      ? rfcEmisor.toUpperCase()
+      : normalizeName(merchantName).toUpperCase();
+
+    // Only write fields we actually have, so we never clobber an existing name with null.
     const data = { invoiceUrl: discovered };
-    if (state.merchantName) {
-      data.merchantName = state.merchantName;
-      data.normalizedName = normalizeName(state.merchantName);
+    if (merchantName) {
+      data.merchantName = merchantName;
+      data.normalizedName = normalizeName(merchantName);
     }
-    await KnownMerchant.upsert(rfcEmisor, data);
+    await KnownMerchant.upsert(merchantKey, data);
+
+    const activeRecipe = await MerchantRecipe.findActiveByRfc(merchantKey);
+    const recipeFields = activeRecipe
+      ? { recipeId: String(activeRecipe._id), recipeVersion: activeRecipe.version }
+      : {};
 
     log.info("Portal discovered and persisted", {
-      rfcEmisor,
+      rfcEmisor: merchantKey,
       portalUrl: discovered,
     });
     return {
       status: INVOICE_STATUS.RESOLVING_PORTAL,
       portalUrl: discovered,
       urlSource: "research",
+      rfcEmisor: merchantKey,
       ...recipeFields,
       detail: `discovered + persisted — ${discovered}${
         activeRecipe ? ` (recipe v${activeRecipe.version})` : ""
@@ -132,7 +163,7 @@ export async function resolvePortal(state) {
 
   // 3. Neither cache nor discovery produced a URL → terminal NO_URL.
   throw engineError(
-    `No facturación portal found for ${rfcEmisor}`,
+    `No facturación portal found for ${merchantName || rfcEmisor}`,
     ENGINE_ERRORS.NO_URL.code
   );
 }

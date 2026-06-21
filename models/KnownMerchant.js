@@ -31,6 +31,18 @@ const knownMerchantSchema = new mongoose.Schema(
   }
 );
 
+/** Normalize a name to match normalizedName: lowercase, strip diacritics, drop punctuation. */
+function normalizeName(name) {
+  if (!name) return "";
+  return String(name)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Look up a merchant by RFC emisor.
  * @param {string} rfcEmisor
@@ -39,6 +51,20 @@ const knownMerchantSchema = new mongoose.Schema(
 knownMerchantSchema.statics.findByRfc = function findByRfc(rfcEmisor) {
   if (!rfcEmisor) return Promise.resolve(null);
   return this.findOne({ rfcEmisor: rfcEmisor.trim().toUpperCase() });
+};
+
+/**
+ * Look up a merchant by display name, matching on its normalized form. This is the
+ * PRIMARY join key: most tickets don't print the issuing RFC, but the OCR almost
+ * always yields a merchant name. Exact normalized match (no fuzzy/partial) so two
+ * different merchants can't collide.
+ * @param {string} name
+ * @returns {Promise<mongoose.Document|null>}
+ */
+knownMerchantSchema.statics.findByName = function findByName(name) {
+  const normalized = normalizeName(name);
+  if (!normalized) return Promise.resolve(null);
+  return this.findOne({ normalizedName: normalized });
 };
 
 /**
