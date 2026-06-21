@@ -19,7 +19,7 @@ const ACCEPT = "application/pdf";
  * @param {Object} [props]
  * @param {(key: string) => void} [props.onUploaded] - Called with the R2 object key.
  */
-export default function CsfUpload({ onUploaded }) {
+export default function CsfUpload({ onUploaded, compact = false }) {
   const [isUploading, setIsUploading] = useState(false);
   const [key, setKey] = useState(null);
   const fileInputRef = useRef(null);
@@ -85,6 +85,35 @@ export default function CsfUpload({ onUploaded }) {
     uploadCsf(file);
   }
 
+  // Compact mode for dashboard: smaller ghost button
+  if (compact) {
+    return (
+      <>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ACCEPT}
+          className="hidden"
+          onChange={handleChange}
+          disabled={isUploading}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isUploading}
+          className="inline-flex items-center justify-center gap-2 py-2 px-4 text-[13px] font-semibold leading-none rounded-full border transition-all disabled:opacity-50"
+          style={{
+            background: "transparent",
+            borderColor: "var(--border-strong)",
+            color: "var(--text-strong)",
+          }}
+        >
+          {isUploading ? "Subiendo..." : "Actualizar CSF"}
+        </button>
+      </>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <input
@@ -102,12 +131,12 @@ export default function CsfUpload({ onUploaded }) {
         disabled={isUploading}
         className="flex h-12 items-center justify-center gap-2 rounded-full bg-foreground px-6 text-background transition-colors hover:bg-[#383838] disabled:opacity-50 dark:hover:bg-[#ccc]"
       >
-        {isUploading ? "Uploading…" : "Upload CSF PDF"}
+        {isUploading ? "Subiendo..." : "Subir CSF PDF"}
       </button>
 
       {key && (
         <p className="break-all text-xs text-zinc-500 dark:text-zinc-400">
-          Uploaded: {key}
+          Subido: {key}
         </p>
       )}
     </div>

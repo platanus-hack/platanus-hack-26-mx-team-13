@@ -5,17 +5,29 @@
 // Visual status chips. The Ticket model uses: uploaded | ocr_done | failed.
 export const STATUS = {
   uploaded: {
-    label: "Uploaded",
+    label: "Subido",
     className: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+    bgVar: "var(--warm-100)",
+    colorVar: "var(--warm-700)",
   },
   ocr_done: {
-    label: "Read",
+    label: "Leido",
     className:
       "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+    bgVar: "var(--info-soft)",
+    colorVar: "var(--info-text)",
   },
   failed: {
-    label: "Failed",
+    label: "Con error",
     className: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+    bgVar: "var(--danger-soft)",
+    colorVar: "var(--danger-text)",
+  },
+  invoiced: {
+    label: "Facturado",
+    className: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+    bgVar: "var(--success-soft)",
+    colorVar: "var(--success-text)",
   },
 };
 

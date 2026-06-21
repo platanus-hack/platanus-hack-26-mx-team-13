@@ -17,13 +17,13 @@ import { getTaxRegimeName } from "@/data/sat-catalogs";
  * @param {Object|null} [props.initialCompany] - The user's existing Company
  *   (plain JSON), or null if they have not uploaded a CSF yet.
  */
-export default function CsfSection({ initialCompany = null }) {
+export default function CsfSection({ initialCompany = null, compact = false }) {
   const [company, setCompany] = useState(initialCompany);
   const [isExtracting, setIsExtracting] = useState(false);
 
   async function handleUploaded(key) {
     setIsExtracting(true);
-    const toastId = toast.loading("Reading your CSF…");
+    const toastId = toast.loading("Leyendo tu CSF...");
 
     try {
       const res = await fetch("/api/user/extract-csf", {
@@ -35,16 +35,30 @@ export default function CsfSection({ initialCompany = null }) {
       const body = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(body.error || "Could not read your CSF");
+        throw new Error(body.error || "No pudimos leer tu CSF");
       }
 
       setCompany(body.company);
-      toast.success("Fiscal profile saved", { id: toastId });
+      toast.success("Perfil fiscal guardado", { id: toastId });
     } catch (error) {
-      toast.error(error.message || "Something went wrong", { id: toastId });
+      toast.error(error.message || "Algo salio mal", { id: toastId });
     } finally {
       setIsExtracting(false);
     }
+  }
+
+  // In compact mode, only show the upload button (profile shown by parent)
+  if (compact) {
+    return (
+      <div className="flex flex-col gap-2">
+        <CsfUpload onUploaded={handleUploaded} compact />
+        {isExtracting && (
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            Extrayendo datos fiscales...
+          </p>
+        )}
+      </div>
+    );
   }
 
   return (

@@ -5,7 +5,7 @@ import Link from "next/link";
 import TicketUpload from "@/components/TicketUpload";
 import TicketDetail from "@/components/TicketDetail";
 import InvoiceProgress from "@/components/InvoiceProgress";
-import { formatTotal, formatDate } from "@/components/ticketFormat";
+import { STATUS, formatTotal, formatDate } from "@/components/ticketFormat";
 
 // The dashboard is an action surface, not the full list — show only a preview.
 const PREVIEW_LIMIT = 5;
@@ -17,7 +17,7 @@ const PREVIEW_LIMIT = 5;
  * `onUploaded`, which refetches the list so the freshly-read ticket appears
  * with its extracted fields and status.
  */
-export default function TicketsSection() {
+export default function TicketsSection({ compact = false }) {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   // The ticket whose detail modal is open (null = closed).
@@ -51,6 +51,75 @@ export default function TicketsSection() {
       cur && cur.id === updated.id ? { ...cur, ...updated } : cur
     );
   }, []);
+
+  // In compact mode, show simplified ticket rows for dashboard
+  if (compact) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        {loading ? (
+          <p className="text-sm py-3" style={{ color: "var(--text-muted)" }}>Cargando...</p>
+        ) : tickets.length === 0 ? (
+          <p className="text-sm py-3" style={{ color: "var(--text-muted)" }}>
+            Aun no tienes tickets. Sube un recibo para comenzar.
+          </p>
+        ) : (
+          tickets.map((t) => {
+            const status = STATUS[t.status] || STATUS.uploaded;
+            const e = t.extracted || {};
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setSelected(t)}
+                className="flex items-center gap-3 py-[9px] px-[10px] rounded-lg text-left transition-colors hover:bg-[var(--bg-subtle)]"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <span
+                  className="w-10 h-10 rounded-[9px] flex-none overflow-hidden"
+                  style={{
+                    border: "1px solid var(--border-default)",
+                    background: "repeating-linear-gradient(135deg, #EEEBE2 0 5px, #F6F4EE 5px 10px)",
+                  }}
+                >
+                  <img
+                    src={`/api/user/tickets/${t.id}/image`}
+                    alt=""
+                    loading="lazy"
+                    className="w-full h-full object-cover"
+                  />
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate" style={{ color: "var(--text-strong)" }}>
+                    {e.merchantNameGuess || e.rfcEmisor || "Recibo"}
+                  </p>
+                  <p className="text-xs font-mono" style={{ color: "var(--text-faint)" }}>
+                    {e.rfcEmisor || "—"}
+                  </p>
+                </div>
+                <span className="text-sm font-mono font-semibold" style={{ color: "var(--text-body)" }}>
+                  {formatTotal(e.total)}
+                </span>
+                <span
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold rounded-full py-[5px] px-[11px] whitespace-nowrap"
+                  style={{
+                    background: status.bgVar || "var(--info-soft)",
+                    color: status.colorVar || "var(--info-text)",
+                  }}
+                >
+                  <span className="w-[7px] h-[7px] rounded-full bg-current" />
+                  {status.label}
+                </span>
+              </button>
+            );
+          })
+        )}
+
+        {selected ? (
+          <TicketDetail ticket={selected} onClose={() => setSelected(null)} onChange={patchTicket} />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-5">

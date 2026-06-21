@@ -23,6 +23,7 @@
     "@google-cloud/vision": "^5.3.7",
     "@trigger.dev/sdk": "4.4.6",
     "jsqr": "^1.4.0",
+    "lucide-react": "^1.21.0",
     "mongodb": "^7.3.0",
     "mongoose": "^9.7.1",
     "next": "16.2.9",
