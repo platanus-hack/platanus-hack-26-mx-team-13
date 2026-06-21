@@ -34,7 +34,7 @@ const SESSION_TIMEOUT_SECONDS = 3600;
 // "anthropic/" prefix auto-loads ANTHROPIC_API_KEY from the env, same as the
 // reach_form agent). Override with ENGINE_LLM_MODEL (e.g. anthropic/claude-sonnet-4-6
 // for higher-fidelity extraction).
-const ENGINE_MODEL = process.env.ENGINE_LLM_MODEL || "anthropic/claude-haiku-4-5";
+const ENGINE_MODEL = process.env.ENGINE_LLM_MODEL || "anthropic/claude-sonnet-4-6";
 
 // Options shared by every Stagehand constructor. The critical pieces are about
 // logging: Stagehand's default logger boots a pino + pino-pretty transport that

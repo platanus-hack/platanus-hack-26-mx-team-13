@@ -18,9 +18,9 @@
 //     keyword like folio/sucursal/punto de venta/total + no password). We stop on the
 //     gate too — the data-aware fill step enters the real ticket values into it.
 //
-//   Phase 3 — AI navigation. A Stagehand operator agent (Sonnet plans, Haiku
+//   Phase 3 — AI navigation. A Stagehand operator agent (Opus plans, Sonnet
 //     executes) clicks through "Facturar/Generar factura" flows, wizards, modals
-//     and new tabs to reach a form (maxSteps 10, 90s budget). It navigates by
+//     and new tabs to reach a form (maxSteps 14, 90s budget). It navigates by
 //     CLICKING ONLY — it never types into fields (typing here copies the portal's
 //     sample-ticket example; the real data is entered later by the fill step). It
 //     emits a token (LOGIN_REQUIRED / CAPTCHA_DETECTED / PAGE_BROKEN) at a wall.
@@ -45,12 +45,13 @@ const log = createLogger({ component: "engine:reach-form" });
 // Operator-agent models (Stagehand v3, AI SDK provider format). The planning model
 // reasons about the next navigation step; the execution model drives the lower-level
 // act/observe calls. ANTHROPIC_API_KEY is auto-loaded from the environment.
-const REACH_PLANNING_MODEL = "anthropic/claude-sonnet-4-6";
-const REACH_EXECUTION_MODEL = "anthropic/claude-haiku-4-5";
+const REACH_PLANNING_MODEL = "anthropic/claude-opus-4-8";
+const REACH_EXECUTION_MODEL = "anthropic/claude-sonnet-4-6";
 
-// Agent budget: enough hops to clear a wizard/modal, capped so a confused agent
-// can't burn tokens or wall-clock indefinitely.
-const AGENT_MAX_STEPS = 10;
+// Agent budget: enough hops to dismiss a cookie/consent banner, click into a
+// "Facturación"/"Facturación electrónica" entry point, and reach the gate — capped
+// so a confused agent can't burn tokens or wall-clock indefinitely.
+const AGENT_MAX_STEPS = 14;
 const AGENT_TIMEOUT_MS = 90000;
 
 // Fiscal-form signal: a real CFDI form mentions at least one of these (accent- and
@@ -87,17 +88,9 @@ const LOOKUP_KEYWORDS = [
   "transaccion",
 ];
 
-// Captcha intent in page text (the widget check in analyzePage covers the markup).
-const CAPTCHA_KEYWORDS = [
-  "captcha",
-  "recaptcha",
-  "hcaptcha",
-  "no soy un robot",
-  "verifica que eres humano",
-  "verificar que eres humano",
-  "verify you are human",
-  "i am not a robot",
-];
+// Captcha is detected from a real WIDGET only (the DOM querySelector in
+// analyzePage), never from page text — footer/help copy mentioning "captcha" or
+// "no soy un robot" used to false-positive whole portals. See classifyBlocker.
 
 // Login intent — only meaningful when a visible password field is also present.
 const LOGIN_KEYWORDS = [
@@ -149,18 +142,20 @@ const REACH_INSTRUCTION = [
   "is EITHER a ticket-lookup form (fields like Sucursal/Tienda, Folio, Punto de Venta,",
   "Fecha, Total/Importe) OR the fiscal form (RFC, razón social, régimen fiscal, uso de",
   "CFDI, código postal). Reaching EITHER one means you are done.",
-  "Navigate ONLY by clicking — never by typing:",
-  "- Accept or close cookie banners, pop-ups and modal dialogs.",
-  "- Click buttons, links or tabs such as 'Facturar', 'Generar factura', 'Facturación',",
-  "  'Solicitar factura' or 'Facturación electrónica'.",
-  "- Follow links even when they open in a new browser tab.",
+  "Navigate ONLY by clicking — never by typing. Work in this order:",
+  "1. FIRST, dismiss anything covering the page: accept or close cookie/consent",
+  "   banners ('Aceptar', 'Acepto', 'Entendido', 'OK'), and close pop-ups or modal",
+  "   dialogs. Clear these before looking for the entry point.",
+  "2. THEN find and click the invoicing entry point — a button, link or tab such as",
+  "   'Facturar', 'Facturación', 'Facturación electrónica', 'Generar factura' or",
+  "   'Solicitar factura'. Follow it even when it opens a new browser tab.",
+  "3. STOP the instant ANY data-entry form is visible — the ticket-lookup gate OR the",
+  "   fiscal form. Reaching either one is success; do not keep clicking past it.",
   "ABSOLUTE RULE: do NOT type into or fill ANY input field, and do NOT click a search/",
   "submit/'Facturar' button that would submit a form. The portal often shows a SAMPLE",
   "ticket as a guide — never copy its values. Entering data is a later step's job, with",
   "the user's real ticket data; if you type here you would enter the wrong (example)",
   "values.",
-  "STOP as soon as a form with input fields (lookup OR fiscal) is visible. Do not fill",
-  "or submit anything.",
   "If you cannot reach a form because the portal demands signing in, reply with the",
   "single token LOGIN_REQUIRED. If a captcha blocks you, reply CAPTCHA_DETECTED. If",
   "the page is broken or shows a server error, reply PAGE_BROKEN.",
@@ -208,16 +203,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Analyze a page, but POLL until its form has rendered before giving a verdict.
- * Merchant portals are SPAs (Alsuper renders the fiscal form client-side after
- * load), so a single analyze at domcontentloaded races the render and can see
- * zero inputs — making a page that IS the form look empty. Re-analyze until the
- * page reads as a real form, reads as blocked, or the budget elapses; return the
- * last signals either way. Free (no AI) — just a few extra DOM reads.
+ * Merchant portals are SPAs (Alsuper renders its ticket-lookup gate client-side
+ * after load, sometimes slowly), so a single analyze at domcontentloaded races the
+ * render and can see zero inputs — making a page that IS the form look empty. The
+ * timeout is generous (~20s) so a slow SPA gate still renders within budget; the
+ * loop early-exits the instant a form/gate/blocker is detected, so fast portals
+ * still return immediately. Re-analyze until the page reads as a real form, reads
+ * as blocked, or the budget elapses; return the last signals either way. Free (no
+ * AI) — just a few extra DOM reads.
  *
  * @param {import("playwright").Page} page
  * @param {{timeoutMs?: number, intervalMs?: number}} [opts]
  */
-async function analyzePageReady(page, { timeoutMs = 9000, intervalMs = 600 } = {}) {
+async function analyzePageReady(page, { timeoutMs = 20000, intervalMs = 600 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let signals = await analyzePage(page);
   while (
@@ -328,14 +326,25 @@ function classifyBlocker(signals) {
   if (!signals) return null;
   const haystack = normalizeText(`${signals.textSnippet} ${signals.title}`);
 
-  // Captcha: an embedded widget, or unambiguous challenge text.
-  if (signals.hasCaptchaWidget || CAPTCHA_KEYWORDS.some((k) => haystack.includes(k))) {
+  // Captcha: a REAL widget only — never page text. Footer/help copy mentioning
+  // "captcha"/"no soy un robot" used to false-positive whole portals; and
+  // Browserbase auto-solves captchas by default (SDK solveCaptchas defaults true),
+  // so a captcha only truly matters at submit, which is a human handoff anyway. A
+  // widget inline on an otherwise reachable form is handled by the Phase-1 carve-out;
+  // here it only blocks a challenge-only page (no reachable form).
+  if (signals.hasCaptchaWidget && !isReachableForm(signals)) {
     return ENGINE_ERRORS.CAPTCHA_DETECTED.code;
   }
 
-  // Login wall: a visible password field AND sign-in intent. Without a password
-  // field it is not a blocker (login is optional when invoice fields are visible).
-  if (signals.hasPassword && LOGIN_KEYWORDS.some((k) => haystack.includes(k))) {
+  // Login wall: a visible password field AND sign-in intent, but only when the page
+  // is NOT itself a reachable form. A public facturación form can co-host an
+  // "iniciar sesión" link plus a header password box — that is not a login wall.
+  // Prefer the agent's explicit LOGIN_REQUIRED token over this static co-presence.
+  if (
+    signals.hasPassword &&
+    !isReachableForm(signals) &&
+    LOGIN_KEYWORDS.some((k) => haystack.includes(k))
+  ) {
     return ENGINE_ERRORS.LOGIN_REQUIRED.code;
   }
 
@@ -557,11 +566,13 @@ export async function reachForm(state) {
     // classified, correctly human-resolvable error; no point spending AI on it.
     const landingBlocker = classifyBlocker(landingSignals);
     // A page that already IS the fillable form must not be declared blocked by a mere
-    // TEXT mention of a blocker keyword (e.g. form copy "si aparece un captcha,
-    // resuélvelo", or stray error/404 wording). Only a real captcha WIDGET genuinely
-    // blocks a form that's right there; otherwise defer to the Phase 2 real-form check.
-    const formDespiteText =
-      isReachableForm(landingSignals) && !landingSignals?.hasCaptchaWidget;
+    // TEXT mention of a blocker keyword (e.g. stray error/404 wording in copy). Let a
+    // real, fillable form through EVEN IF a captcha widget is present inline — an
+    // inline captcha on a reachable form is not a wall (Browserbase auto-solves, and a
+    // captcha only matters at submit, a human handoff). classifyBlocker already only
+    // flags a captcha WIDGET when the page is NOT a reachable form, so this carve-out
+    // just defers any remaining text-driven blocker to the Phase 2 real-form check.
+    const formDespiteText = isReachableForm(landingSignals);
     if (landingBlocker && !formDespiteText) {
       throw engineError(
         `Portal blocked before the form (${landingBlocker})`,
