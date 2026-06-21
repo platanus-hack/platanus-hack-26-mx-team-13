@@ -14,12 +14,13 @@ import {
 // How often to poll the ticket while a run is in flight.
 const POLL_INTERVAL_MS = 3000;
 
-// The live view (#66) is a human-viewable page; Ticket.invoice.connectUrl is a
-// Browserbase CDP endpoint (wss), not browsable. Only surface a clickable live
-// view when the persisted URL is actually an http(s) page — otherwise the
-// handoff button stays disabled with a "coming soon" hint until #66 lands.
+// The interactive live view is a human-drivable page (Browserbase
+// debuggerFullscreenUrl), persisted on Ticket.invoice.liveViewUrl during an
+// awaiting_human handoff. connectUrl is a CDP endpoint (wss), not browsable, so
+// we only fall back to it when it happens to be an http(s) page. Returns null
+// when there's no embeddable URL yet (the handoff CTA stays disabled).
 function liveViewUrl(invoice) {
-  const u = invoice?.connectUrl;
+  const u = invoice?.liveViewUrl || invoice?.connectUrl;
   return typeof u === "string" && /^https?:\/\//i.test(u) ? u : null;
 }
 
@@ -39,14 +40,36 @@ function liveViewUrl(invoice) {
 export default function InvoiceProgress({ ticket, compact = false, onChange }) {
   const [invoice, setInvoice] = useState(ticket.invoice || null);
   const [starting, setStarting] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [liveDisconnected, setLiveDisconnected] = useState(false);
   const [error, setError] = useState(null);
 
   // Re-seed when the row changes to a different ticket (lists reuse this
   // component across rows). Within one ticket, polling owns `invoice` state.
   useEffect(() => {
     setInvoice(ticket.invoice || null);
+    setLiveDisconnected(false);
     setError(null);
   }, [ticket.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The embedded Browserbase live view posts `browserbase-disconnected` when its
+  // session ends (the human closed it, or the CDP session timed out). Surface
+  // that so the user knows to click "Listo" (or the run will time out).
+  useEffect(() => {
+    function onMessage(event) {
+      const data = event?.data;
+      if (data === "browserbase-disconnected" || data?.type === "browserbase-disconnected") {
+        setLiveDisconnected(true);
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  // A fresh handoff clears any stale "disconnected" flag from a previous one.
+  useEffect(() => {
+    if (invoice?.status === INVOICE_STATUS.AWAITING_HUMAN) setLiveDisconnected(false);
+  }, [invoice?.status, invoice?.liveViewUrl]);
 
   const refresh = useCallback(async () => {
     try {
@@ -104,6 +127,35 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
     [ticket, onChange]
   );
 
+  // "Listo, ya lo resolví": the user finished the blocker in the live session.
+  // Completes the durable waitpoint so the engine resumes; the run leaves
+  // awaiting_human asynchronously, so we just keep polling for the new status.
+  const resolve = useCallback(
+    async (event) => {
+      event?.stopPropagation?.();
+      setResuming(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/user/tickets/${ticket.id}/invoice/resume`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recordedActions: [] }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(data.error || "No se pudo reanudar la factura");
+          return;
+        }
+        refresh();
+      } catch {
+        setError("No se pudo reanudar la factura");
+      } finally {
+        setResuming(false);
+      }
+    },
+    [ticket.id, refresh]
+  );
+
   const sizeClass = compact ? "px-3 py-1 text-xs" : "px-5 py-2 text-sm";
   const genLabel = invoice?.status === INVOICE_STATUS.FAILED ? "Reintentar" : "Generar factura";
 
@@ -119,7 +171,8 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
   );
 
   // A handoff CTA that opens the live view in a new tab when available, else a
-  // disabled button (the live view, #66, isn't wired yet).
+  // disabled button. Used in compact list rows (the detail modal embeds the live
+  // view inline instead); the ready_to_submit handoff still uses it everywhere.
   function liveViewButton(label, tone) {
     const url = liveViewUrl(invoice);
     const palette =
@@ -210,16 +263,66 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
       ) : (
         <div className="flex flex-col gap-4">
           {invoice.status === INVOICE_STATUS.AWAITING_HUMAN ? (
-            <div className="flex flex-col gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-500/40 dark:bg-amber-900/20">
+            <div className="flex flex-col gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-500/40 dark:bg-amber-900/20">
               <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                El asistente necesita tu ayuda para continuar.
+                El asistente necesita tu ayuda para continuar. Resuelve el bloqueo
+                (captcha, inicio de sesión o el formulario) en la ventana de abajo y
+                luego pulsa “Listo”.
               </p>
-              <div>{liveViewButton("Resolver", "attention")}</div>
-              {!liveViewUrl(invoice) ? (
+
+              {liveViewUrl(invoice) ? (
+                <div className="overflow-hidden rounded-lg border border-amber-300 bg-white dark:border-amber-500/40 dark:bg-black">
+                  {/* Interactive live view: the human drives the SAME Browserbase
+                      session. sandbox allows scripts + same-origin so the embedded
+                      debugger works, and there is NO pointer-events:none — the user
+                      can actually click and type inside it. */}
+                  <iframe
+                    src={liveViewUrl(invoice)}
+                    title="Vista en vivo del navegador"
+                    sandbox="allow-same-origin allow-scripts"
+                    allow="clipboard-read; clipboard-write"
+                    className="h-[460px] w-full border-0"
+                  />
+                </div>
+              ) : (
                 <p className="text-xs text-amber-700 dark:text-amber-300/80">
                   La vista en vivo estará disponible pronto.
                 </p>
+              )}
+
+              {liveDisconnected ? (
+                <p className="text-xs text-amber-700 dark:text-amber-300/80">
+                  La vista en vivo se desconectó. Si ya resolviste el bloqueo, pulsa
+                  “Listo”.
+                </p>
               ) : null}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={resolve}
+                  disabled={resuming}
+                  className={`rounded-full bg-emerald-600 font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 ${sizeClass}`}
+                >
+                  {resuming ? "Reanudando…" : "Listo, ya lo resolví"}
+                </button>
+                {liveViewUrl(invoice) ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      window.open(
+                        liveViewUrl(invoice),
+                        "_blank",
+                        "noopener,noreferrer"
+                      );
+                    }}
+                    className={`rounded-full border border-amber-400 font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-500/50 dark:text-amber-200 dark:hover:bg-amber-900/30 ${sizeClass}`}
+                  >
+                    Abrir en pestaña
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : null}
 
