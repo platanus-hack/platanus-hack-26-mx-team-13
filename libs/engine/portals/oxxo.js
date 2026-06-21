@@ -105,19 +105,28 @@ async function setField(page, id, value) {
  */
 async function selectByText(page, base, match) {
   await page.locator(E(base + "_label")).first().click({ timeout: 5000 }).catch(() => {});
-  await page.waitForTimeout(900);
-  const lis = page.locator(E(base + "_panel") + " li");
-  const n = await lis.count();
+  await page.waitForTimeout(700);
+  // Find the matching option's INDEX in ONE round-trip. Reading each <li>'s innerText
+  // separately is ~1.7s per call on the Stagehand-wrapped page, so a panel with dozens
+  // of options cost seconds per dropdown. We still CLICK with a real Playwright click so
+  // the PrimeFaces option handler fires reliably.
   const want = String(match).toLowerCase();
-  for (let i = 0; i < n; i++) {
-    const text = (await lis.nth(i).innerText().catch(() => "")).trim();
-    if (text && text.toLowerCase().includes(want)) {
-      await lis.nth(i).click({ timeout: 4000 }).catch(() => {});
-      await page.waitForTimeout(400);
-      return text;
-    }
-  }
-  return null;
+  const hit = await page
+    .evaluate(
+      ({ panelId, want }) => {
+        const panel = document.getElementById(panelId);
+        if (!panel) return null;
+        const lis = [...panel.querySelectorAll("li")];
+        const i = lis.findIndex((el) => (el.textContent || "").toLowerCase().includes(want));
+        return i >= 0 ? { idx: i, text: (lis[i].textContent || "").trim() } : null;
+      },
+      { panelId: `form:${base}_panel`, want }
+    )
+    .catch(() => null);
+  if (!hit) return null;
+  await page.locator(E(base + "_panel") + " li").nth(hit.idx).click({ timeout: 4000 }).catch(() => {});
+  await page.waitForTimeout(400);
+  return hit.text || "ok";
 }
 
 /** Break a Date|ISO-string into {day, month0, year} without TZ drift. */
@@ -173,16 +182,21 @@ async function pickSaleDate(page, dateValue) {
     await page.waitForTimeout(500);
   }
 
-  // Click the day cell whose link text is exactly the day-of-month.
-  const days = page.locator(
-    "#ui-datepicker-div a, .ui-datepicker-calendar a, " + E("fecha_panel") + " a"
-  );
-  const n = await days.count();
-  for (let i = 0; i < n; i++) {
-    if (((await days.nth(i).innerText().catch(() => "")).trim()) === String(parts.day)) {
-      await days.nth(i).click({ timeout: 4000 }).catch(() => {});
-      break;
-    }
+  // Click the day cell by text. Reading each <a>'s innerText separately is ~1.7s per
+  // call on the Stagehand-wrapped page (≈24s across a month grid — the biggest single
+  // delay before filling). Find the index in ONE round-trip, then click it for real.
+  const daySel = ".ui-datepicker-calendar a, #ui-datepicker-div td a";
+  const dayIdx = await page
+    .evaluate(
+      ({ sel, day }) =>
+        [...document.querySelectorAll(sel)].findIndex(
+          (a) => (a.textContent || "").trim() === String(day)
+        ),
+      { sel: daySel, day: parts.day }
+    )
+    .catch(() => -1);
+  if (dayIdx >= 0) {
+    await page.locator(daySel).nth(dayIdx).click({ timeout: 4000 }).catch(() => {});
   }
   await page.waitForTimeout(400);
   const val = await page.locator(E("fecha_input")).first().inputValue().catch(() => "");
