@@ -1,4 +1,3 @@
-import sharp from "sharp";
 import { analyzeImageQuality } from "@/libs/image/quality";
 import { createLogger } from "@/libs/core/logger";
 
@@ -48,6 +47,9 @@ export async function enhanceForOCR(buffer) {
   }
 
   try {
+    // Lazy-load sharp (see quality.js): keeps the native binary out of the
+    // `next build` page-data step; the catch below falls back to original bytes.
+    const sharp = (await import("sharp")).default;
     const quality = await analyzeImageQuality(buffer);
 
     // Already good enough — don't touch the bytes.
