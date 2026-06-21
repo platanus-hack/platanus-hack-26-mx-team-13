@@ -79,6 +79,11 @@ export const ENGINE_ERRORS = Object.freeze({
     false,
     "Replaying the stored recipe failed (portal likely changed)."
   ),
+  ALREADY_INVOICED: define(
+    "ALREADY_INVOICED",
+    false,
+    "The receipt was already invoiced at the merchant portal — nothing to generate."
+  ),
   UNKNOWN: define("UNKNOWN", false, "Unclassified failure."),
 });
 

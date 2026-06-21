@@ -105,8 +105,11 @@ async function driveOxxo(page, data) {
   log("  fecha:", await page.locator(E("fecha_input")).first().inputValue().catch(()=>""));
   await set("folio", data.folio ?? ""); if(data.venta) await set("venta", data.venta); if(data.total!=null) await set("total", Number(data.total).toFixed(2));
   await page.locator(E("validarTicket")).first().click({timeout:6000}).catch(()=>{});
-  let validated=false; for(let s=0;s<7;s++){ await page.waitForTimeout(1800); if((await body()).includes("ticket ingresado es válido")){validated=true;break;} }
-  log("  validado:", validated); if(!validated) return { validated:false, reachedDownload:false };
+  const ALREADY=/ya\s.{0,30}facturad[oa]|previamente\sfacturad[oa]|ticket\sya\sfacturad/i;
+  let validated=false, alreadyInvoiced=false;
+  for(let s=0;s<7;s++){ await page.waitForTimeout(1800); const b=await body(); if(b.includes("ticket ingresado es válido")){validated=true;break;} if(ALREADY.test(b)){alreadyInvoiced=true;break;} }
+  if(alreadyInvoiced){ log("  ✗ ticket YA FACTURADO"); return { validated:false, alreadyInvoiced:true, reachedDownload:false }; }
+  log("  validado:", validated); if(!validated) return { validated:false, alreadyInvoiced:false, reachedDownload:false };
 
   await page.locator(E("continuar")).first().click({timeout:6000}).catch(()=>{}); await page.waitForTimeout(3500);
   await pick("selectOneMenuPais","xico");

@@ -75,6 +75,12 @@ const USO_MATCH = {
 
 const VALID_TOAST = "ticket ingresado es válido";
 
+// OXXO's "this receipt was already invoiced" responses — no valid toast ever
+// appears for these, so detect them explicitly instead of spinning out the
+// validation budget and reporting a generic non-validation. Covers "ya fue
+// facturado", "ya está facturado", "ya se encuentra facturado/a", etc.
+const ALREADY_INVOICED_RE = /ya\s.{0,30}facturad[oa]|previamente\sfacturad[oa]|ticket\sya\sfacturad/i;
+
 /** CSS id selector for a PrimeFaces `form:<id>` element (escapes the colon). */
 const E = (id) => "#form\\:" + String(id).replace(/:/g, "\\:");
 
@@ -181,7 +187,7 @@ async function pickSaleDate(page, dateValue) {
  *
  * @param {import("playwright").Page} page - live page (navigated to the portal or blank).
  * @param {import("@/libs/engine/billingData").BillingData & {venta?:string|null}} data
- * @returns {Promise<{ validated: boolean, generated: boolean, reachedDownload: boolean }>}
+ * @returns {Promise<{ validated: boolean, alreadyInvoiced: boolean, generated: boolean, reachedDownload: boolean }>}
  */
 export async function driveOxxoToDownload(page, data) {
   // Land on the portal (idempotent — init_navigate may already be here).
@@ -209,18 +215,30 @@ export async function driveOxxoToDownload(page, data) {
   await page.locator(E("validarTicket")).first().click({ timeout: 6000 }).catch(() => {});
 
   // Validation gate — wait for the explicit "es válido" toast (the observe the
-  // form actually needs). No toast within budget → the ticket didn't validate.
+  // form actually needs), while watching for the "already invoiced" message: an
+  // already-facturado receipt never produces the valid toast, so detect it here so
+  // the run ends with a clear terminal reason instead of a generic non-validation.
   let validated = false;
+  let alreadyInvoiced = false;
   for (let s = 0; s < 7; s++) {
     await page.waitForTimeout(1800);
-    if ((await bodyText(page)).includes(VALID_TOAST)) {
+    const body = await bodyText(page);
+    if (body.includes(VALID_TOAST)) {
       validated = true;
       break;
     }
+    if (ALREADY_INVOICED_RE.test(body)) {
+      alreadyInvoiced = true;
+      break;
+    }
+  }
+  if (alreadyInvoiced) {
+    log.warn("OXXO: ticket already invoiced", { folio: data.folio });
+    return { validated: false, alreadyInvoiced: true, generated: false, reachedDownload: false };
   }
   if (!validated) {
     log.warn("OXXO: ticket did not validate", { folio: data.folio });
-    return { validated: false, generated: false, reachedDownload: false };
+    return { validated: false, alreadyInvoiced: false, generated: false, reachedDownload: false };
   }
 
   // --- Advance to the fiscal section ---
@@ -274,7 +292,7 @@ export async function driveOxxoToDownload(page, data) {
   }
 
   log.info("OXXO driver finished", { validated, reachedDownload });
-  return { validated: true, generated: true, reachedDownload };
+  return { validated: true, alreadyInvoiced: false, generated: true, reachedDownload };
 }
 
 export default driveOxxoToDownload;

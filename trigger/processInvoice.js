@@ -43,6 +43,11 @@ const log = createLogger({ component: "engine:process-invoice" });
 // throw transient errors) so allow more attempts than form filling.
 const NAV_MAX_ATTEMPTS = 3;
 const FILL_MAX_ATTEMPTS = 2;
+// The portal driver is one expensive deterministic pass (navigate → validate →
+// fill → generate → collect, ~60-120s). Retrying re-drives the whole portal and,
+// for terminal outcomes (already invoiced, ticket won't validate), just wastes a
+// run — the user can hit "Reintentar" on a genuinely transient failure. One pass.
+const DRIVER_MAX_ATTEMPTS = 1;
 
 // How long a human handoff stays open before the waitpoint times out and the run
 // fails (which closes the Browserbase session). The run itself holds NO compute
@@ -389,7 +394,7 @@ export const processInvoiceTask = task({
     //     off; anything else fails. Only fires when a driver exists for the RFC, so
     //     every other merchant keeps the normal pipeline below.
     if (!handedOff && getPortalDriver(state.rfcEmisor)) {
-      if (await stepWithRetry("deliver_invoice", deliverInvoice, FILL_MAX_ATTEMPTS)) {
+      if (await stepWithRetry("deliver_invoice", deliverInvoice, DRIVER_MAX_ATTEMPTS)) {
         // Terminal success: the CFDI is generated, collected, and stored. Unlike
         // the human-confirm paths (awaiting_human / ready_to_submit) NOBODY needs
         // the browser anymore, so release the keepAlive Browserbase session now —

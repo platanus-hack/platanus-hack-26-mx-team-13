@@ -66,6 +66,15 @@ export async function deliverInvoice(state) {
     const page = getActivePage(stagehand);
 
     const result = await driver(page, data);
+    if (result.alreadyInvoiced) {
+      // Terminal and NOT human-resolvable: the receipt is already facturado, so
+      // there's nothing to generate and a person at the keyboard can't change that.
+      // Spanish message — it surfaces to the user on the ticket's failed state.
+      throw engineError(
+        "Este ticket ya fue facturado en el portal del comercio.",
+        ENGINE_ERRORS.ALREADY_INVOICED.code
+      );
+    }
     if (!result.validated) {
       throw engineError(
         "The portal did not validate the ticket data (date/folio/ID de venta/total)",
