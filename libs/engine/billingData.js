@@ -48,28 +48,11 @@ import { engineError } from "./node.js";
  * @property {string|null} terminal - Terminal/POS identifier; not yet extracted → null for now.
  */
 
-/**
- * The closed set of recipe dataKeys — exactly the keys of a BillingData object.
- * A recipe maps each form field it fills to one of these. Exported so the fill
- * and distilling steps share one source of truth instead of hardcoding strings.
- * @type {ReadonlyArray<string>}
- */
-export const BILLING_DATA_KEYS = Object.freeze([
-  "rfc",
-  "businessName",
-  "taxRegime",
-  "taxRegimeFormatted",
-  "postalCode",
-  "cfdiUsage",
-  "paymentMethod",
-  "email",
-  "folio",
-  "total",
-  "subtotal",
-  "date",
-  "sucursal",
-  "terminal",
-]);
+// The closed set of recipe dataKeys — exactly the keys of a BillingData object.
+// A recipe maps each form field it fills to one of these. Defined once in
+// billingDataKeys.js (single source of truth) and re-exported here so the fill /
+// distilling steps and the MerchantRecipe schema all share the same list.
+export { BILLING_DATA_KEYS } from "@/libs/engine/billingDataKeys";
 
 // Read the first element of a value that may be an array, a scalar, or absent.
 // Company.taxRegime is a [String] of codes; a portal form takes a single regime,
