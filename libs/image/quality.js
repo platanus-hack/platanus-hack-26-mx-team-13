@@ -1,4 +1,3 @@
-import sharp from "sharp";
 import { createLogger } from "@/libs/core/logger";
 
 // Pre-OCR image quality analysis.
@@ -61,6 +60,11 @@ export async function analyzeImageQuality(buffer) {
   }
 
   try {
+    // Lazy-load sharp: importing it at module top-level would load the native
+    // binary during `next build` page-data collection (where the platform
+    // binary may be unavailable) and break the build. Loaded here, the existing
+    // catch degrades to "good quality" if the binary can't load at runtime.
+    const sharp = (await import("sharp")).default;
     const T = QUALITY_THRESHOLDS;
 
     // Resolution from metadata.
