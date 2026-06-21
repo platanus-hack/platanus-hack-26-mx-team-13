@@ -19,7 +19,10 @@ import {
   getLiveViewUrl,
   reconnectSession,
   closeSession,
+  getActivePage,
 } from "@/libs/engine/session";
+import { assembleBillingData } from "@/libs/engine/billingData";
+import { attachRecorder, drainRecordedActions } from "@/libs/engine/recorder";
 import {
   resolvePortal,
   initNavigate,
@@ -224,6 +227,28 @@ export const processInvoiceTask = task({
         hasLiveView: Boolean(liveViewUrl),
       });
 
+      // Inject the action recorder so the human's clicks/fills in the Live View are
+      // captured (multi-strategy selectors + values) for distillation. It buffers
+      // in-page (window + sessionStorage) and re-injects on each navigation, so it
+      // keeps recording while this run is suspended on the waitpoint below — no Node
+      // is connected then. On resume we reconnect and drain the buffer. Best-effort:
+      // a failure here just means the recipe falls back to whatever the client posts.
+      if (state.browserbaseSessionId) {
+        try {
+          const { stagehand } = await reconnectSession(state.browserbaseSessionId);
+          try {
+            await attachRecorder(getActivePage(stagehand));
+          } finally {
+            await stagehand.close().catch(() => {});
+          }
+        } catch (err) {
+          log.warn("process-invoice: could not attach recorder for handoff", {
+            ticketId,
+            error: String(err),
+          });
+        }
+      }
+
       // Suspend durably until the human resolves it. forToken resolves with the
       // data the resume route passed to completeToken.
       const result = await wait.forToken(token);
@@ -237,30 +262,54 @@ export const processInvoiceTask = task({
         return false;
       }
 
-      // The human worked the form live; fold in any actions the resume route
-      // captured and mark the run human-driven so distill records a human recipe.
+      // The human worked the form live; mark the run human-driven so distill records
+      // a human recipe (recordedVia:'human').
       const resumed = result.output || {};
-      const mergedActions = [
-        ...(state.recordedActions || []),
-        ...(Array.isArray(resumed.recordedActions) ? resumed.recordedActions : []),
-      ];
 
-      // Reconnect to the same keepAlive session the human used — parity with the
-      // other nodes and a liveness check after the handoff. Drop the local handle
-      // immediately (keepAlive keeps the cloud session for the confirmed-submit
-      // step). Best-effort: distill works off state even if the session expired
-      // (Browserbase drops idle CDP after ~10 min).
+      // Reconnect to the same keepAlive session the human used and drain the
+      // recorder's buffer — the human's clicks/fills as recordedActions, each value
+      // mapped to a billing dataKey (#56). Drop the local handle immediately
+      // (keepAlive keeps the cloud session for the confirmed-submit step).
+      // Best-effort: distill works off state even if the session expired or nothing
+      // was captured (Browserbase drops idle CDP after ~10 min).
+      let capturedActions = [];
       if (state.browserbaseSessionId) {
         try {
           const { stagehand } = await reconnectSession(state.browserbaseSessionId);
-          await stagehand.close().catch(() => {});
+          try {
+            // billingData drives value→dataKey mapping; unavailable is non-fatal
+            // (actions still distill, with literal staticValues instead of dataKeys).
+            let billingData = null;
+            try {
+              billingData = await assembleBillingData(state.ticketId, state.userId);
+            } catch (err) {
+              log.warn("process-invoice: billingData unavailable for recorder mapping", {
+                ticketId,
+                error: String(err),
+              });
+            }
+            capturedActions = await drainRecordedActions(
+              getActivePage(stagehand),
+              billingData
+            );
+          } finally {
+            await stagehand.close().catch(() => {});
+          }
         } catch (err) {
-          log.warn("process-invoice: reconnect after handoff failed", {
+          log.warn("process-invoice: drain recorder after handoff failed", {
             ticketId,
             error: String(err),
           });
         }
       }
+
+      // Fold the server-captured actions (the real source) plus any the resume route
+      // received from the client into the run's recordedActions for distillation.
+      const mergedActions = [
+        ...(state.recordedActions || []),
+        ...capturedActions,
+        ...(Array.isArray(resumed.recordedActions) ? resumed.recordedActions : []),
+      ];
 
       await persist({
         method: INVOICE_METHOD.HUMAN,
@@ -359,28 +408,33 @@ export const processInvoiceTask = task({
     // 6. Form is ready; park for the (human-confirmed) submit step. This is the
     //    terminal step that sets the final success status, so a failure here must
     //    fail the run like every other step (don't report a half-done run as ok).
+    //
+    //    The client STOPS polling the moment it sees READY_TO_SUBMIT (it's not in
+    //    POLLABLE — see components/invoiceFormat.js), so that status must NEVER be
+    //    persisted without the interactive liveViewUrl the "Revisar y enviar" button
+    //    needs — otherwise the client reads the URL-less intermediate state, stops
+    //    polling, and strands the button disabled until a manual refresh. So fetch
+    //    the live view FIRST and put it on state, making ready_to_submit's persist
+    //    write status + liveViewUrl atomically. (connectUrl is a CDP endpoint, not
+    //    browsable, so the UI needs this http(s) liveViewUrl. Best-effort: an expired
+    //    session just leaves it null — the same as before, but never mid-transition.)
+    state.liveViewUrl = await fetchLiveViewUrl();
     if (!(await step("ready_to_submit", readyToSubmit))) return fail();
 
     // ready_to_submit parks at awaiting_human when it can't verify a submit control
     // on an automated fill (it never fabricates one). Route that through one
     // durable handoff; when the human confirms in the live session, the form is
     // ready to submit. (A human-driven fill is already trusted ready, so this only
-    // fires on an ai/recipe fill that found no submit control.)
+    // fires on an ai/recipe fill that found no submit control.) The handoff clears
+    // liveViewUrl on resume, so re-establish a fresh interactive live view and the
+    // READY_TO_SUBMIT status in a SINGLE atomic persist (same no-race contract).
     if (state.status === INVOICE_STATUS.AWAITING_HUMAN) {
       if (!(await handoff())) return fail();
+      await persist({
+        status: INVOICE_STATUS.READY_TO_SUBMIT,
+        liveViewUrl: await fetchLiveViewUrl(),
+      });
     }
-
-    // Land in READY_TO_SUBMIT with a fresh interactive live view so the user can
-    // review the filled form and confirm submit in the SAME keepAlive session.
-    // Every path here would otherwise strand them with no browsable URL: the
-    // automated AI/recipe success never set a live view, and a human handoff
-    // cleared it on resume. (connectUrl is a CDP endpoint, not browsable, so the
-    // UI's "Revisar y enviar" needs this http(s) liveViewUrl.) Best-effort: a
-    // session that has since expired just leaves liveViewUrl null.
-    await persist({
-      status: INVOICE_STATUS.READY_TO_SUBMIT,
-      liveViewUrl: await fetchLiveViewUrl(),
-    });
 
     log.info("process-invoice finished", {
       ticketId,
