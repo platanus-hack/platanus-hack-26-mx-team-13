@@ -404,16 +404,19 @@ function HowItWorksSection() {
       num: "01",
       title: "Sube tu CSF",
       desc: "Subele tu Constancia de Situacion Fiscal una sola vez. Facturin arma tu perfil: RFC, razon social y regimen.",
+      gradient: "linear-gradient(150deg, #0F7A38 0%, #0C4824 60%, #072813 100%)",
     },
     {
       num: "02",
       title: "Toma la foto del ticket",
       desc: "Facturin lee la imagen y extrae comercio, folio, subtotal y total — todo validado contra el SAT en segundos.",
+      gradient: "linear-gradient(150deg, #F5A524 0%, #C9711A 58%, #7C3E0C 100%)",
     },
     {
       num: "03",
       title: "Descarga tu CFDI",
       desc: "Recibes el CFDI 4.0 valido en PDF y XML, listo para tu contabilidad. Sin capturar nada a mano.",
+      gradient: "linear-gradient(150deg, #16A34A 0%, #0C6F33 58%, #04280F 100%)",
     },
   ];
 
@@ -449,8 +452,35 @@ function HowItWorksSection() {
         </div>
       </div>
 
-      {/* Pinned scroller */}
-      <div id="fctHiwWrap" className="relative h-[300vh]">
+      {/* Mobile: static stacked steps (no scroll-jack) */}
+      <div className="lg:hidden max-w-[640px] mx-auto px-5 pt-10 pb-6 flex flex-col gap-5">
+        {steps.map((s) => (
+          <div
+            key={s.num}
+            className="rounded-[var(--radius-xl)] overflow-hidden"
+            style={{
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border-subtle)",
+              boxShadow: "var(--shadow-md)",
+            }}
+          >
+            <div className="relative h-24" style={{ background: s.gradient }}>
+              <span
+                className="absolute left-5 bottom-4 inline-flex items-center font-mono text-[13px] font-semibold text-white py-1.5 px-3.5 rounded-full"
+                style={{ background: "rgba(7,28,12,.5)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,.18)" }}
+              >
+                {s.num} - {s.title}
+              </span>
+            </div>
+            <p className="m-0 p-5 text-[15.5px] leading-relaxed" style={{ color: "var(--text-body)" }}>
+              {s.desc}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop: pinned scroll-jacked scroller */}
+      <div id="fctHiwWrap" className="relative h-[300vh] hidden lg:block">
         <div className="sticky top-0 min-h-screen max-w-[1200px] mx-auto grid lg:grid-cols-[0.82fr_1.18fr] gap-8 lg:gap-[60px] items-start lg:items-center px-5 py-10 md:p-12">
           {/* Steps */}
           <div>
