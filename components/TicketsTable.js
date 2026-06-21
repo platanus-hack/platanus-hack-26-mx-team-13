@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { STATUS, formatTotal, formatDate } from "@/components/ticketFormat";
+import { formatTotal, formatDate } from "@/components/ticketFormat";
 import TicketDetail from "@/components/TicketDetail";
+import InvoiceProgress from "@/components/InvoiceProgress";
 
 // Status-filter tabs. `value` is the API `?status=` param (null = all statuses).
 // Order mirrors the receipt lifecycle: everything → read → just uploaded → failed.
@@ -99,6 +100,17 @@ export default function TicketsTable() {
     return () => abortRef.current?.abort();
   }, [activeTab, fetchPage]);
 
+  // Merge a refreshed ticket (from a live invoice run) back into the table and,
+  // if it's the open one, the modal — so its status cell and the modal stay in sync.
+  const patchTicket = useCallback((updated) => {
+    setTickets((prev) =>
+      prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t))
+    );
+    setSelected((cur) =>
+      cur && cur.id === updated.id ? { ...cur, ...updated } : cur
+    );
+  }, []);
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap gap-2">
@@ -145,7 +157,6 @@ export default function TicketsTable() {
             </thead>
             <tbody className="divide-y divide-black/[.06] dark:divide-white/[.08]">
               {tickets.map((t) => {
-                const status = STATUS[t.status] || STATUS.uploaded;
                 const e = t.extracted || {};
                 const label = e.merchantNameGuess || e.rfcEmisor || "Receipt";
                 return (
@@ -180,11 +191,11 @@ export default function TicketsTable() {
                       {formatDate(e.date) || "—"}
                     </td>
                     <td className="px-4 py-3">
-                      <span
-                        className={`inline-block rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}
-                      >
-                        {status.label}
-                      </span>
+                      <InvoiceProgress
+                        ticket={t}
+                        compact
+                        onChange={patchTicket}
+                      />
                     </td>
                   </tr>
                 );
@@ -208,7 +219,11 @@ export default function TicketsTable() {
       ) : null}
 
       {selected ? (
-        <TicketDetail ticket={selected} onClose={() => setSelected(null)} />
+        <TicketDetail
+          ticket={selected}
+          onClose={() => setSelected(null)}
+          onChange={patchTicket}
+        />
       ) : null}
     </div>
   );

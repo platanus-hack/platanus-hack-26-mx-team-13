@@ -7,6 +7,7 @@ import {
   formatDate,
   formatDateTime,
 } from "@/components/ticketFormat";
+import InvoiceProgress from "@/components/InvoiceProgress";
 
 // The extracted fields, in display order, with how each value should render.
 // Centralizes the key/value panel so labels and formatting stay in one place.
@@ -30,8 +31,10 @@ const FIELDS = [
  * @param {Object} props
  * @param {Object} props.ticket - A ticket from GET /api/user/tickets.
  * @param {() => void} props.onClose - Called to dismiss the modal.
+ * @param {(ticket: Object) => void} [props.onChange] - Bubbles up the refreshed
+ *   ticket when the invoice run advances, so the list behind the modal stays in sync.
  */
-export default function TicketDetail({ ticket, onClose }) {
+export default function TicketDetail({ ticket, onClose, onChange }) {
   // Close on Escape, and lock background scroll while the modal is open.
   useEffect(() => {
     const onKeyDown = (e) => {
@@ -137,12 +140,13 @@ export default function TicketDetail({ ticket, onClose }) {
                 );
               })}
             </dl>
-
-            {/* Placeholder for the future CFDI "Download invoice" action. */}
-            <div className="mt-auto rounded-xl border border-dashed border-black/[.12] px-4 py-3 text-center text-xs text-zinc-400 dark:border-white/[.18] dark:text-zinc-500">
-              Invoice download coming soon
-            </div>
           </div>
+        </div>
+
+        {/* Invoicing engine: "Generar factura", live status + stages, and the
+            ready-to-submit / awaiting-human handoffs. */}
+        <div className="border-t border-black/[.08] px-6 py-5 dark:border-white/[.145]">
+          <InvoiceProgress ticket={ticket} onChange={onChange} />
         </div>
       </div>
     </div>

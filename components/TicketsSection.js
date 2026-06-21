@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import TicketUpload from "@/components/TicketUpload";
 import TicketDetail from "@/components/TicketDetail";
+import InvoiceProgress from "@/components/InvoiceProgress";
 import { STATUS, formatTotal, formatDate } from "@/components/ticketFormat";
 
 // The dashboard is an action surface, not the full list — show only a preview.
@@ -39,6 +40,17 @@ export default function TicketsSection({ compact = false }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Merge a refreshed ticket (from a live invoice run) back into the list and,
+  // if it's the open one, the modal — so the chip and modal stay in sync.
+  const patchTicket = useCallback((updated) => {
+    setTickets((prev) =>
+      prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t))
+    );
+    setSelected((cur) =>
+      cur && cur.id === updated.id ? { ...cur, ...updated } : cur
+    );
+  }, []);
 
   // In compact mode, show simplified ticket rows for dashboard
   if (compact) {
@@ -103,7 +115,7 @@ export default function TicketsSection({ compact = false }) {
         )}
 
         {selected ? (
-          <TicketDetail ticket={selected} onClose={() => setSelected(null)} />
+          <TicketDetail ticket={selected} onClose={() => setSelected(null)} onChange={patchTicket} />
         ) : null}
       </div>
     );
@@ -135,14 +147,13 @@ export default function TicketsSection({ compact = false }) {
         ) : (
           <ul className="flex flex-col divide-y divide-black/[.06] dark:divide-white/[.08]">
             {tickets.map((t) => {
-              const status = STATUS[t.status] || STATUS.uploaded;
               const e = t.extracted || {};
               return (
-                <li key={t.id}>
+                <li key={t.id} className="flex items-center gap-3 py-3">
                   <button
                     type="button"
                     onClick={() => setSelected(t)}
-                    className="flex w-full items-center gap-3 py-3 text-left transition-colors hover:bg-black/[.03] dark:hover:bg-white/[.04]"
+                    className="-my-1 flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1 text-left transition-colors hover:bg-black/[.03] dark:hover:bg-white/[.04]"
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element -- private auth-gated proxy, not optimizable by next/image */}
                     <img
@@ -161,12 +172,10 @@ export default function TicketsSection({ compact = false }) {
                         {e.rfcEmisor ? ` · ${e.rfcEmisor}` : ""}
                       </p>
                     </div>
-                    <span
-                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}
-                    >
-                      {status.label}
-                    </span>
                   </button>
+                  <div className="shrink-0">
+                    <InvoiceProgress ticket={t} compact onChange={patchTicket} />
+                  </div>
                 </li>
               );
             })}
@@ -175,7 +184,11 @@ export default function TicketsSection({ compact = false }) {
       </div>
 
       {selected ? (
-        <TicketDetail ticket={selected} onClose={() => setSelected(null)} />
+        <TicketDetail
+          ticket={selected}
+          onClose={() => setSelected(null)}
+          onChange={patchTicket}
+        />
       ) : null}
     </div>
   );
