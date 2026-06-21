@@ -9,7 +9,7 @@
 // shell owns the spine — ordering, retry counters, the recipe-vs-AI branch, per-node
 // persistence, the HITL handoff, and failure handling.
 
-import { task, wait } from "@trigger.dev/sdk";
+import { task, wait, logger } from "@trigger.dev/sdk";
 import connectMongoose from "@/libs/core/mongoose";
 import Ticket from "@/models/Ticket";
 import { INVOICE_STATUS, INVOICE_METHOD } from "@/libs/engine/state";
@@ -128,11 +128,32 @@ export const processInvoiceTask = task({
 
     // Run one node: wrap it with runNode (records a stage, classifies failures),
     // persist the merged state, and report success (no error after the merge).
-    const step = async (name, fn) => {
-      const partial = await runNode(name, fn, state);
-      await persist(partial);
-      return !state.error;
-    };
+    // The whole thing runs inside a logger.trace span so each stage shows up in
+    // the Trigger run timeline with its own duration + attributes, and the node's
+    // own console logs nest under it — turning the run view into a readable,
+    // filterable trace of what the engine did at each step.
+    const step = async (name, fn) =>
+      logger.trace(name, async (span) => {
+        span.setAttribute("ticketId", String(ticketId));
+        const partial = await runNode(name, fn, state);
+        await persist(partial);
+        const ok = !state.error;
+        // The stage runNode just appended carries the human-readable outcome.
+        const stage = state.stages?.[state.stages.length - 1];
+        span.setAttribute("ok", ok);
+        if (state.method) span.setAttribute("method", state.method);
+        if (state.errorType) span.setAttribute("errorType", state.errorType);
+        const meta = {
+          ticketId,
+          ok,
+          ...(state.method ? { method: state.method } : {}),
+          ...(stage?.detail ? { detail: stage.detail } : {}),
+          ...(state.errorType ? { errorType: state.errorType } : {}),
+        };
+        if (ok) logger.info(`${name} ✓`, meta);
+        else logger.warn(`${name} ✗`, meta);
+        return ok;
+      });
 
     // Run a node with a retry budget. runNode swallows throws into state.error,
     // so we retry while it keeps failing. Each attempt appends its own stage, so
