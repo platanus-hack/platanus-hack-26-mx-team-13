@@ -27,6 +27,13 @@ const extractedSchema = z.object({
   subtotal: z.number().nullable(),
   date: z.string().nullable(),
   merchantNameGuess: z.string().nullable(),
+  // Ticket-lookup fields: most MX portals gate the fiscal form behind a lookup that
+  // asks for these (branch + POS + folio + total + date) to find the purchase.
+  sucursal: z.string().nullable(),
+  puntoVenta: z.string().nullable(),
+  // Forma de pago printed on the ticket (EFECTIVO/TARJETA/...). Mapped to a SAT
+  // code when obvious; otherwise the raw printed string. Feeds the CFDI form.
+  paymentMethod: z.string().nullable(),
 });
 
 // JSON Schema mirror of extractedSchema, handed to Claude as a tool definition so
@@ -65,6 +72,21 @@ const EXTRACT_TOOL = {
         description:
           "Best guess at the merchant/store name. A hint only — not used as a key.",
       },
+      sucursal: {
+        type: ["string", "null"],
+        description:
+          "Branch / store identifier of the purchase: a branch name and/or store number, e.g. 'ALSUPER PLUS BOSQUES', 'Sucursal Centro', 'Tienda #058'. Prefer the most specific branch label printed. null if not present.",
+      },
+      puntoVenta: {
+        type: ["string", "null"],
+        description:
+          "Point-of-sale / checkout identifier: the register, lane, terminal or 'punto de venta' number, e.g. '16' from 'Punto de Venta: 16', 'Caja 3'. Digits only when it is a number. null if not present.",
+      },
+      paymentMethod: {
+        type: ["string", "null"],
+        description:
+          "Forma de pago printed on the ticket (EFECTIVO, TARJETA, TARJETA DE CRÉDITO/DÉBITO, etc.). When the payment type is obvious, map it to the SAT code: '01' efectivo, '04' tarjeta de crédito, '28' tarjeta de débito. Otherwise return the raw string as printed. null if not present.",
+      },
     },
     required: [
       "rfcEmisor",
@@ -73,6 +95,9 @@ const EXTRACT_TOOL = {
       "subtotal",
       "date",
       "merchantNameGuess",
+      "sucursal",
+      "puntoVenta",
+      "paymentMethod",
     ],
     additionalProperties: false,
   },
@@ -86,13 +111,17 @@ Rules:
 - rfcEmisor is the merchant's RFC (12-13 alphanumeric chars, e.g. "XAXX010101000"). Only fill it if an RFC clearly appears; do not derive it from the merchant name.
 - total and subtotal are plain numbers (strip "$", "MXN", thousands separators).
 - date must be ISO 8601 (YYYY-MM-DD, optionally with time).
-- merchantNameGuess is a best-effort store name and is a hint only.`;
+- merchantNameGuess is a best-effort store name and is a hint only.
+- sucursal is the branch/store identifier of the purchase (branch name and/or store number, e.g. "ALSUPER PLUS BOSQUES", "Tienda #058"). This is what a portal's "Sucursal/Tienda" lookup field needs.
+- puntoVenta is the register/checkout/terminal number (e.g. "16" from "Punto de Venta: 16", "Caja 3"). Keep it as printed (digits only when numeric).
+- paymentMethod is the forma de pago printed on the ticket (e.g. "EFECTIVO", "TARJETA", "TARJETA DE CRÉDITO"). When the payment type is obvious, map it to the SAT code: "01" efectivo, "04" tarjeta de crédito, "28" tarjeta de débito. Otherwise return the raw string as printed.
+- For sucursal, puntoVenta and paymentMethod: only fill them if clearly printed; never invent them.`;
 
 /**
  * Parse raw receipt OCR text into structured ticket fields using Claude Haiku.
  *
  * @param {string} rawText - The OCR text returned by Google Vision.
- * @returns {Promise<{rfcEmisor: string|null, folio: string|null, total: number|null, subtotal: number|null, date: string|null, merchantNameGuess: string|null}>}
+ * @returns {Promise<{rfcEmisor: string|null, folio: string|null, total: number|null, subtotal: number|null, date: string|null, merchantNameGuess: string|null, sucursal: string|null, puntoVenta: string|null, paymentMethod: string|null}>}
  */
 export async function parseTicket(rawText) {
   if (!rawText || !rawText.trim()) {

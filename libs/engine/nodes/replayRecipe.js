@@ -39,7 +39,11 @@ import MerchantRecipe from "@/models/MerchantRecipe";
 import { INVOICE_STATUS, INVOICE_METHOD } from "@/libs/engine/state";
 import { ENGINE_ERRORS } from "@/libs/engine/errorTypes";
 import { engineError } from "@/libs/engine/node";
-import { assembleBillingData, getBillingValue } from "@/libs/engine/billingData";
+import {
+  assembleBillingData,
+  getBillingValue,
+  redactBillingData,
+} from "@/libs/engine/billingData";
 import { reconnectSession, getActivePage } from "@/libs/engine/session";
 import { createLogger } from "@/libs/core/logger";
 
@@ -336,6 +340,13 @@ export async function replayRecipe(state) {
 
   // Values to write (#56). MISSING_COMPANY_DATA propagates: AI can't fix it either.
   const billingData = await assembleBillingData(state.ticketId, state.userId);
+
+  // Presence-only log (no values) — same as fill_form, so a replay run shows in
+  // trigger.log which OCR + CSF fields the recipe is binding against.
+  log.info("replay_recipe: billingData", {
+    ticketId: state.ticketId,
+    present: redactBillingData(billingData),
+  });
 
   // Drive the live session reach_form left on the form. A missing session is an
   // upstream/infra problem, not a recipe defect, so we don't penalize the recipe's

@@ -29,6 +29,7 @@ import {
   reachForm,
   replayRecipe,
   fillForm,
+  reviewForm,
   distillRecipe,
   readyToSubmit,
 } from "@/libs/engine/nodes";
@@ -425,6 +426,21 @@ export const processInvoiceTask = task({
       // A form we found but couldn't fill (FORM_FILL_FAILED) is human-resolvable —
       // hand off so a person finishes it live; any other failure ends the run.
       if (!filled) {
+        if (!isHumanResolvable(state.errorType)) return fail();
+        if (!(await handoff())) return fail();
+        handedOff = true;
+      }
+    }
+
+    // 4b. Review the filled form before trusting it. Per-field readback only proves
+    //     a value was TYPED, not that the portal accepted it — review_form re-reads
+    //     the live page for an explicit error (modal / validation message). A
+    //     rejection (FORM_REJECTED) is human-resolvable: hand off so a person fixes
+    //     it live instead of parking a rejected form at ready_to_submit. Skipped when
+    //     a human already filled the form (they saw the result) — and review_form is
+    //     itself a no-op without a live session.
+    if (!handedOff) {
+      if (!(await step("review_form", reviewForm))) {
         if (!isHumanResolvable(state.errorType)) return fail();
         if (!(await handoff())) return fail();
         handedOff = true;

@@ -33,8 +33,8 @@ import { engineError } from "./node.js";
  * @property {string|null} taxRegime - Primary SAT tax-regime code (e.g. "626").
  * @property {string|null} taxRegimeFormatted - Human-readable regime name for that code.
  * @property {string|null} postalCode - Fiscal address postal code (código postal).
- * @property {string|null} cfdiUsage - Uso de CFDI; not yet captured on Company → null for now.
- * @property {string|null} paymentMethod - Forma/método de pago; not yet captured on Company → null for now.
+ * @property {string|null} cfdiUsage - Uso de CFDI; defaults to "G03" (Gastos en general) since no Company field captures it yet — the most common uso for expense receipts.
+ * @property {string|null} paymentMethod - Forma/método de pago; prefers extracted.paymentMethod, else defaults to "PUE" (Pago en una sola exhibición).
  *
  * From User (account):
  * @property {string|null} email - Address the invoice (CFDI) should be sent to.
@@ -44,8 +44,9 @@ import { engineError } from "./node.js";
  * @property {number|null} total - Grand total.
  * @property {number|null} subtotal - Subtotal before tax.
  * @property {Date|null} date - Purchase date (formatting is the fill step's concern).
- * @property {string|null} sucursal - Branch identifier; not yet extracted → null for now.
- * @property {string|null} terminal - Terminal/POS identifier; not yet extracted → null for now.
+ * @property {string|null} sucursal - Branch/store identifier from the receipt (lookup gate).
+ * @property {string|null} puntoVenta - Register/checkout/POS number from the receipt (lookup gate).
+ * @property {string|null} terminal - Terminal identifier; not yet extracted → null for now.
  */
 
 // The closed set of recipe dataKeys — exactly the keys of a BillingData object.
@@ -117,9 +118,14 @@ export async function assembleBillingData(ticketId, userId) {
     taxRegime: regimeCode,
     taxRegimeFormatted: getTaxRegimeName(regimeCode),
     postalCode: company.fiscalAddress?.postalCode ?? null,
-    // Not yet captured on Company; surfaced as null so the dataKey still resolves.
-    cfdiUsage: null,
-    paymentMethod: null,
+    // CFDI defaults: most portals REQUIRE these, so a null leaves the form
+    // incomplete. No Company field captures them yet, so we fall back to the
+    // most common SAT values for expense receipts.
+    // "G03" = Gastos en general (the usual uso de CFDI for expenses).
+    cfdiUsage: "G03",
+    // Prefer a value the OCR extracted from the ticket; else "PUE" = Pago en
+    // una sola exhibición (single-payment, by far the most common método).
+    paymentMethod: extracted.paymentMethod ?? "PUE",
 
     // User (account)
     email: user?.email ?? null,
@@ -129,8 +135,9 @@ export async function assembleBillingData(ticketId, userId) {
     total: extracted.total ?? null,
     subtotal: extracted.subtotal ?? null,
     date: extracted.date ?? null,
-    // Not yet extracted from receipts; surfaced as null.
     sucursal: extracted.sucursal ?? null,
+    puntoVenta: extracted.puntoVenta ?? null,
+    // Not yet extracted from receipts; surfaced as null.
     terminal: extracted.terminal ?? null,
   };
 }
@@ -148,4 +155,22 @@ export function getBillingValue(billingData, dataKey) {
   if (!billingData || !dataKey) return null;
   const value = billingData[dataKey];
   return value === undefined ? null : value;
+}
+
+/**
+ * Presence map of an assembled billingData — `{ dataKey: boolean }`, true when the
+ * value is non-null. Safe to log: it reveals WHICH fiscal/receipt fields the fill
+ * step has, never the values themselves. Use this in trigger.log to confirm the
+ * agent is driven by the real OCR + CSF data (and to spot missing fields like
+ * cfdiUsage) without leaking PII.
+ *
+ * @param {BillingData} billingData
+ * @returns {Record<string, boolean>}
+ */
+export function redactBillingData(billingData) {
+  const out = {};
+  for (const k of Object.keys(billingData || {})) {
+    out[k] = billingData[k] != null;
+  }
+  return out;
 }

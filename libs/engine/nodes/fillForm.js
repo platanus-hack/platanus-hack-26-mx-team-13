@@ -32,6 +32,7 @@ import { ENGINE_ERRORS } from "@/libs/engine/errorTypes";
 import {
   assembleBillingData,
   getBillingValue,
+  redactBillingData,
   BILLING_DATA_KEYS,
 } from "@/libs/engine/billingData";
 import { reconnectSession, getActivePage } from "@/libs/engine/session";
@@ -59,7 +60,8 @@ const DATA_KEY_HINTS = Object.freeze({
   total: "Total de la compra",
   subtotal: "Subtotal de la compra",
   date: "Fecha de la compra",
-  sucursal: "Sucursal / tienda",
+  sucursal: "Sucursal / tienda donde se hizo la compra",
+  puntoVenta: "Punto de venta / caja / número de terminal (normalmente un número)",
   terminal: "Terminal / caja / número de transacción",
 });
 
@@ -109,6 +111,70 @@ function normalize(value) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ");
+}
+
+/** normalize + strip diacritics, for tolerant <option> matching. */
+function normalizeLoose(value) {
+  return normalize(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+/**
+ * Choose the option on a <select> that best matches our value. Portals label branch
+ * dropdowns freely ("ALSUPER PLUS BOSQUES" for our "BOSQUES", or a store number), so
+ * an exact match is too strict. Try exact label then exact value, then fall back to
+ * the closest real option by normalized containment / token overlap (placeholders
+ * like "-- Seleccione --" have an empty value and are skipped). Throws when nothing
+ * matches, so the field is left for a human rather than picking the wrong branch.
+ */
+async function selectOptionFuzzy(locator, valueStr) {
+  // Exact label, then exact value — the common, unambiguous cases.
+  try {
+    await locator.selectOption({ label: valueStr });
+    return;
+  } catch {
+    /* fall through */
+  }
+  try {
+    await locator.selectOption(valueStr);
+    return;
+  } catch {
+    /* fall through */
+  }
+
+  // Fuzzy: score every real option against our value and pick the best.
+  const options = await locator
+    .locator("option")
+    .evaluateAll((els) =>
+      els.map((o) => ({ value: o.value, label: (o.textContent || "").trim() }))
+    );
+  const want = normalizeLoose(valueStr);
+  const wantTokens = want.split(" ").filter((t) => t.length >= 3);
+
+  let best = null;
+  let bestScore = 0;
+  for (const o of options) {
+    // Skip placeholders / empty options.
+    if (!o.value || !o.label) continue;
+    const lab = normalizeLoose(o.label);
+    if (!lab) continue;
+    let score = 0;
+    if (lab === want) score = 100;
+    else if (lab.includes(want) || want.includes(lab)) score = 50;
+    else score = wantTokens.filter((t) => lab.includes(t)).length * 10;
+    if (score > bestScore) {
+      best = o;
+      bestScore = score;
+    }
+  }
+
+  if (!best || bestScore === 0) {
+    throw new Error(`no <select> option matched "${valueStr}"`);
+  }
+  await locator
+    .selectOption({ value: best.value })
+    .catch(() => locator.selectOption({ label: best.label }));
 }
 
 /**
@@ -169,14 +235,12 @@ async function fillField(stagehand, label, valueStr, fieldType) {
 
   // Primary path: write the value deterministically. Playwright's fill() clears
   // the field first, so any pre-filled example is replaced, not appended. A
-  // <select> rejects fill() ("not an <input>") — choose the option instead,
-  // trying the visible label first, then the option value.
+  // <select> rejects fill() ("not an <input>") — choose the closest option instead
+  // (exact label/value, then fuzzy), so a branch dropdown still resolves.
   try {
     const locator = getActivePage(stagehand).locator(selector);
     if (isSelect) {
-      await locator
-        .selectOption({ label: valueStr })
-        .catch(() => locator.selectOption(valueStr));
+      await selectOptionFuzzy(locator, valueStr);
     } else {
       await locator.fill(valueStr);
     }
@@ -228,6 +292,16 @@ async function clickNext(stagehand, label) {
   const handle = Array.isArray(handles) ? handles[0] : null;
   if (!handle || !handle.selector) return null;
   await stagehand.act(handle);
+  // The lookup submit advances to the next step, usually an SPA re-render (the
+  // fiscal fields appear client-side). Let it settle before the loop re-extracts,
+  // or the next extract races the render and sees the previous step.
+  try {
+    await getActivePage(stagehand).waitForLoadState("networkidle", {
+      timeout: 5000,
+    });
+  } catch {
+    /* already idle, or still loading — extract whatever rendered */
+  }
   return handle.selector;
 }
 
@@ -235,16 +309,29 @@ async function clickNext(stagehand, label) {
 function buildExtractInstruction(availableKeys) {
   const lines = availableKeys.map((k) => `- ${k}: ${DATA_KEY_HINTS[k]}`);
   return [
-    "This is a Mexican CFDI invoicing (facturación) form, possibly split across",
-    "several steps. Identify the visible input/select fields on the CURRENT step",
-    "that correspond to any of these billing data keys:",
+    "This is a Mexican CFDI invoicing (facturación) flow, usually split across",
+    "several steps. The FIRST step is typically a ticket-lookup gate that asks for",
+    "the purchase's identifying data (sucursal/tienda, folio, punto de venta, fecha,",
+    "total/importe) to find the ticket; a LATER step asks for the buyer's fiscal data",
+    "(RFC, razón social, régimen fiscal, uso de CFDI, código postal). The portal may",
+    "render a SAMPLE ticket as a visual guide — ignore its values; only map the real",
+    "input/select fields.",
+    "",
+    "Identify the visible input/select fields on the CURRENT step that correspond to",
+    "any of these billing data keys:",
     lines.join("\n"),
     "",
     "For each such field return its on-screen label, the matching dataKey, and its",
-    "control type. Set isFiscalStep=true when this step collects fiscal identity",
-    "data (RFC, régimen fiscal, uso de CFDI, razón social). Report the button that",
-    "advances to the next step (nextStepButton) and the final button that submits /",
-    "generates the invoice (submitButton) if either is present.",
+    "control type.",
+    "Set isFiscalStep=true ONLY when this step collects the buyer's fiscal identity",
+    "(RFC, régimen fiscal, uso de CFDI, razón social); a ticket-lookup step is NOT",
+    "fiscal (isFiscalStep=false).",
+    "Buttons: nextStepButton is the control that ADVANCES the flow (looks up the",
+    "ticket / continues to the next step) — classify the lookup/search button here",
+    "EVEN when it is labelled 'Facturar', 'Buscar', 'Consultar', 'Continuar' or",
+    "'Siguiente', because it does not yet issue the CFDI. submitButton is ONLY the",
+    "FINAL button that actually generates/issues the invoice on the fiscal step.",
+    "Report whichever of nextStepButton / submitButton is present.",
   ].join("\n");
 }
 
@@ -256,6 +343,14 @@ export async function fillForm(state) {
   // Assemble the values to write (throws MISSING_COMPANY_DATA when there is no
   // company/RFC — nothing to invoice).
   const billingData = await assembleBillingData(state.ticketId, state.userId);
+
+  // Presence-only log (no values): proves the agent is driven by the real OCR + CSF
+  // data hydrated server-side, not the thin {ticketId} payload, and surfaces missing
+  // fields (e.g. cfdiUsage:false) at a glance in trigger.log.
+  log.info("fill_form: billingData", {
+    ticketId: state.ticketId,
+    present: redactBillingData(billingData),
+  });
 
   // The keys we actually have data for; only these are worth mapping/filling.
   const availableKeys = BILLING_DATA_KEYS.filter(

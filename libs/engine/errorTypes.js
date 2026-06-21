@@ -69,6 +69,11 @@ export const ENGINE_ERRORS = Object.freeze({
     true,
     "The form was found but one or more fields could not be filled."
   ),
+  FORM_REJECTED: define(
+    "FORM_REJECTED",
+    true,
+    "The portal rejected the submitted data (validation error / error modal)."
+  ),
   RECIPE_REPLAY_FAILED: define(
     "RECIPE_REPLAY_FAILED",
     false,

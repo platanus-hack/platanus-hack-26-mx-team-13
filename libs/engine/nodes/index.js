@@ -9,5 +9,6 @@ export { initNavigate } from "./initNavigate.js";
 export { reachForm } from "./reachForm.js";
 export { replayRecipe } from "./replayRecipe.js";
 export { fillForm } from "./fillForm.js";
+export { reviewForm } from "./reviewForm.js";
 export { distillRecipe } from "./distillRecipe.js";
 export { readyToSubmit } from "./readyToSubmit.js";
