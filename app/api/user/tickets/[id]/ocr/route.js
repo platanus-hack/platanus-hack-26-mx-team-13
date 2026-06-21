@@ -27,6 +27,152 @@ function isPdf(buffer) {
   );
 }
 
+// True when value is a non-empty http(s) URL.
+function isHttpUrl(value) {
+  if (!value || typeof value !== "string") return false;
+  try {
+    const u = new URL(value.trim());
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// Whether a URL looks like a facturación portal: a strong signal is "factura",
+// "facturacion" or "cfdi" anywhere in the host or path; any http(s) URL is a
+// weaker signal we still accept (merchants often print a bare portal domain).
+function looksLikeInvoicePortal(url) {
+  try {
+    const u = new URL(url);
+    return /factura|facturacion|cfdi/.test(
+      `${u.hostname}${u.pathname}`.toLowerCase()
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Decode a single QR from the receipt image and, when its payload is a usable
+// facturación portal URL, return { portalUrl, params }. params are any query
+// params on the QR (folio/total/etc.) we can best-effort backfill onto the
+// ticket. Returns null when no QR / no usable URL is found.
+//
+// Best-effort and NON-FATAL: every failure path (no QR lib, sharp error, decode
+// miss, bad URL) returns null and never throws — QR decoding must never break OCR.
+//
+// sharp + jsqr are lazy-imported (mirrors libs/image/enhancement.js) to keep the
+// native sharp binary out of the `next build` page-data step.
+async function decodeTicketQr(buffer, ticketId) {
+  try {
+    if (!buffer || !buffer.length) return null;
+
+    const sharp = (await import("sharp")).default;
+    const jsQR = (await import("jsqr")).default;
+
+    // jsQR needs raw RGBA pixels. ensureAlpha() guarantees 4 channels even for
+    // a JPEG with no alpha; .rotate() bakes EXIF orientation so a sideways phone
+    // photo still presents the QR upright.
+    const { data, info } = await sharp(buffer)
+      .rotate()
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const code = jsQR(
+      new Uint8ClampedArray(data),
+      info.width,
+      info.height
+    );
+    if (!code || !code.data) return null;
+
+    const payload = code.data.trim();
+    if (!isHttpUrl(payload)) return null;
+
+    // Accept a clear facturación portal; otherwise accept any http(s) URL as a
+    // weaker signal (most ticket QRs that ARE URLs point at the portal).
+    if (!looksLikeInvoicePortal(payload)) {
+      log.info("Ticket QR is a URL but not an obvious portal — using as weak signal", {
+        ticketId,
+      });
+    }
+
+    // Pull any folio/total-ish query params for best-effort backfill below.
+    let params = {};
+    try {
+      params = Object.fromEntries(new URL(payload).searchParams.entries());
+    } catch {
+      params = {};
+    }
+
+    return { portalUrl: payload, params };
+  } catch (error) {
+    log.warn("QR decode failed (non-fatal)", {
+      ticketId,
+      message: error?.message,
+    });
+    return null;
+  }
+}
+
+// Best-effort: pull a folio and a numeric total out of the QR query params.
+// QR param names vary by merchant, so match a small set of common keys. Never
+// throws; returns nulls when nothing usable is present.
+function extractQrFields(params) {
+  if (!params || typeof params !== "object") {
+    return { folio: null, total: null };
+  }
+  const lower = {};
+  for (const [k, v] of Object.entries(params)) lower[k.toLowerCase()] = v;
+
+  const folioRaw =
+    lower.folio ?? lower.foliofiscal ?? lower.fol ?? lower.ticket ?? null;
+  const folio =
+    folioRaw != null && String(folioRaw).trim() ? String(folioRaw).trim() : null;
+
+  const totalRaw = lower.total ?? lower.monto ?? lower.importe ?? lower.tt ?? null;
+  let total = null;
+  if (totalRaw != null && String(totalRaw).trim()) {
+    const n = Number(String(totalRaw).replace(/[^0-9.]/g, ""));
+    if (Number.isFinite(n) && n > 0) total = n;
+  }
+
+  return { folio, total };
+}
+
+// Persist a decoded QR onto the ticket (mutates the doc; caller saves it):
+//   - invoice.portalUrl + invoice.urlSource:"qr" — the authoritative portal so
+//     the engine can skip discovery. Preserves any existing invoice fields.
+//   - best-effort backfill of folio/total onto extracted ONLY when the QR carries
+//     them and the parse didn't (never overwrites a value OCR already extracted).
+// No-op when qr is null.
+function applyQrToTicket(ticket, qr) {
+  if (!qr?.portalUrl) return;
+
+  // Set the portal on invoice without clobbering other invoice fields. invoice
+  // is null until a run starts, so seed an object when missing. toObject() on a
+  // subdoc gives a plain object we can spread.
+  const existingInvoice =
+    ticket.invoice && typeof ticket.invoice.toObject === "function"
+      ? ticket.invoice.toObject()
+      : ticket.invoice || {};
+  ticket.invoice = {
+    ...existingInvoice,
+    portalUrl: qr.portalUrl,
+    urlSource: "qr",
+  };
+
+  // Best-effort backfill of folio/total from the QR query params — only fill a
+  // gap, never overwrite what the parse already produced.
+  const { folio, total } = extractQrFields(qr.params);
+  if (!ticket.extracted) ticket.extracted = {};
+  if (folio != null && ticket.extracted.folio == null) {
+    ticket.extracted.folio = folio;
+  }
+  if (total != null && ticket.extracted.total == null) {
+    ticket.extracted.total = total;
+  }
+}
+
 // POST /api/user/tickets/[id]/ocr
 // Auth-gated. Runs the two-step pipeline on a previously uploaded ticket:
 //   R2 image -> Google Vision OCR -> Haiku parse -> Ticket.{ocrText,extracted}
@@ -75,6 +221,14 @@ export async function POST(request, { params }) {
       );
     }
 
+    // Decode any facturación-portal QR printed on the ticket. Many MX tickets
+    // carry one whose payload is the portal URL — having it lets the engine skip
+    // KnownMerchant/Firecrawl discovery and go straight to the form. Best-effort
+    // and non-fatal: a decode failure returns null and never blocks OCR. Decode
+    // from the ORIGINAL bytes (pre-enhancement) so the OCR grayscale/sharpen
+    // pipeline can't degrade the QR finder pattern.
+    const qr = await decodeTicketQr(buffer, ticket._id.toString());
+
     // Best-effort pre-OCR enhancement (contrast/blur/brightness/resolution).
     // Returns the original bytes unchanged if the image is already good or if
     // Sharp fails — it never blocks OCR.
@@ -111,8 +265,10 @@ export async function POST(request, { params }) {
         ticketId: ticket._id.toString(),
       });
       // Persist the raw text so the failed attempt is debuggable, but keep
-      // status "uploaded".
+      // status "uploaded". A decoded QR portal URL is still worth keeping — it
+      // survives the retry and lets the engine skip discovery later.
       ticket.ocrText = rawText;
+      applyQrToTicket(ticket, qr);
       await ticket.save();
       return NextResponse.json(
         { error: "Could not extract receipt details — please retry with a clearer image" },
@@ -124,6 +280,9 @@ export async function POST(request, { params }) {
     ticket.extracted = extracted;
     ticket.status = "ocr_done";
     ticket.error = null;
+    // Persist any decoded QR portal URL (+ best-effort folio/total backfill).
+    // Runs after extracted is set so the backfill fills only real gaps.
+    applyQrToTicket(ticket, qr);
     await ticket.save();
 
     log.info("Ticket OCR done", {
