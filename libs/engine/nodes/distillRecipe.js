@@ -133,7 +133,12 @@ function toRecipeSelector(raw) {
   if (/^xpath=/i.test(selector)) {
     return { xpath: selector.replace(/^xpath=/i, "") };
   }
-  if (/^[(./]|^\/\//.test(selector)) {
+  // Only explicit XPath forms: a leading `/` or `//` (absolute/descendant path), a
+  // leading `./` (relative path), or a `(` grouping expression. A bare leading `.`
+  // is a CSS class selector (e.g. `.submit-button`) — NOT XPath — so it must fall
+  // through to the CSS branch, otherwise replay does `page.locator("xpath=.submit-button")`
+  // and never finds the element, failing valid recipes.
+  if (/^[(/]|^\.\//.test(selector)) {
     return { xpath: selector };
   }
 
