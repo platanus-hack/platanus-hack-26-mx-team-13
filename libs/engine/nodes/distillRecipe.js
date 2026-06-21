@@ -208,18 +208,23 @@ function toRecipeStep(recorded) {
 
   if (DATA_STEP_ACTIONS.has(action)) {
     if (!selector) return null; // can't place a value with no target → drop
-    // Value source: a known billing dataKey (preferred), else a literal value.
     const dataKey =
       recorded.dataKey && VALID_DATA_KEYS.has(recorded.dataKey)
         ? recorded.dataKey
         : null;
-    const literal = !dataKey && recorded.value != null ? String(recorded.value) : null;
-    if (!dataKey && literal == null) return null; // no value to write → drop
+    // SECURITY (cross-tenant): never freeze a recorded literal as staticValue on a
+    // fill/select. A human-typed value that failed dataKey matching is tenant data
+    // (RFC, email, CP, total, folio, régimen) — freezing it would write the
+    // recording user's data into the NEXT user's invoice on replay. If we can't
+    // bind the step to a dataKey, DROP it: replay leaves that field for the AI/human,
+    // which is safe. staticValue stays reserved for merchant-fixed constants — only
+    // navigate URLs use it (handled above), never a fill/select value.
+    if (!dataKey) return null;
     return {
       action,
       selector,
       dataKey,
-      staticValue: literal,
+      staticValue: null,
       description,
     };
   }

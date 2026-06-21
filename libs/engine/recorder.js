@@ -76,16 +76,34 @@ function recorderProgram(config) {
   var BKEY = config.bufferKey;
   var ATTR = config.tagAttr;
 
-  // Rehydrate the running buffer from sessionStorage (survives same-origin
-  // navigations) or the window mirror, so actions accumulate across the form's steps.
-  function loadBuffer() {
+  // Rehydrate the running buffer from the most complete of localStorage (origin-wide,
+  // shared across tabs of the same origin — survives the human opening the form in a
+  // new tab), sessionStorage (per-tab, survives same-origin navigations), or the
+  // window mirror. Take the LONGEST so no source silently truncates the history.
+  function parseList(raw) {
     try {
-      var raw = window.sessionStorage.getItem(SKEY);
-      if (raw) return JSON.parse(raw);
+      var a = raw ? JSON.parse(raw) : [];
+      return Array.isArray(a) ? a : [];
     } catch (e) {
-      /* sessionStorage blocked or corrupt — fall through */
+      return [];
     }
-    return window[BKEY] && window[BKEY].length ? window[BKEY] : [];
+  }
+  function loadBuffer() {
+    var best = [];
+    try {
+      var ls = parseList(window.localStorage.getItem(SKEY));
+      if (ls.length > best.length) best = ls;
+    } catch (e) {
+      /* localStorage blocked — fall through */
+    }
+    try {
+      var ss = parseList(window.sessionStorage.getItem(SKEY));
+      if (ss.length > best.length) best = ss;
+    } catch (e) {
+      /* sessionStorage blocked — fall through */
+    }
+    if (window[BKEY] && window[BKEY].length > best.length) best = window[BKEY];
+    return best;
   }
 
   var buffer = loadBuffer();
@@ -93,10 +111,18 @@ function recorderProgram(config) {
 
   function persist() {
     window[BKEY] = buffer;
+    // Write BOTH stores: sessionStorage for in-tab navigations, localStorage so a
+    // resumed drain (or a different same-origin tab) can recover the full buffer even
+    // after the Node client disconnected during the suspend.
     try {
       window.sessionStorage.setItem(SKEY, JSON.stringify(buffer));
     } catch (e) {
-      /* over quota / blocked — the window mirror still holds it */
+      /* over quota / blocked — the window mirror + localStorage still hold it */
+    }
+    try {
+      window.localStorage.setItem(SKEY, JSON.stringify(buffer));
+    } catch (e) {
+      /* over quota / blocked — the window mirror + sessionStorage still hold it */
     }
   }
 
@@ -489,28 +515,73 @@ export async function attachRecorder(page, { onAction } = {}) {
 export async function drainRecordedActions(page, billingData = null) {
   if (!page) return [];
 
-  let raw = [];
-  try {
-    raw = await page.evaluate((cfg) => {
-      // sessionStorage holds the full cross-navigation accumulation; the window
-      // mirror covers the current document if storage was blocked.
-      var fromStorage = [];
-      try {
-        var s = window.sessionStorage.getItem(cfg.storageKey);
-        if (s) fromStorage = JSON.parse(s);
-      } catch (e) {
-        fromStorage = [];
+  let raw = await readBufferFromPage(page);
+
+  // If the active page yielded nothing, the human may have worked in another tab.
+  // localStorage is origin-shared, so any same-origin page in the context recovers
+  // the full buffer — try the rest before giving up.
+  if (!raw.length) {
+    try {
+      const ctx = typeof page.context === "function" ? page.context() : null;
+      const others = ctx && typeof ctx.pages === "function" ? ctx.pages() : [];
+      for (const p of others) {
+        if (p === page) continue;
+        raw = await readBufferFromPage(p);
+        if (raw.length) break;
       }
-      var fromWindow = window[cfg.bufferKey] || [];
-      return fromStorage.length >= fromWindow.length ? fromStorage : fromWindow;
-    }, RECORDER_CONFIG);
-  } catch (err) {
-    log.warn("recorder: drain failed", { error: String(err) });
-    return [];
+    } catch (err) {
+      log.warn("recorder: scanning other tabs failed", { error: String(err) });
+    }
   }
+
+  // Diagnostic: the prod HITL loop relies on this to see whether the human's actions
+  // were captured at all (an empty drain → distill_recipe skips with "no fill steps").
+  log.info("recorder: drained", { rawActions: raw.length });
 
   const normalized = normalizeRecordedActions(raw);
   return billingData ? mapActionsToDataKeys(normalized, billingData) : normalized;
+}
+
+/**
+ * Read one page's recorder buffer: the LONGEST of localStorage (origin-wide),
+ * sessionStorage (per-tab), and the window mirror. Best-effort — returns [] if the
+ * page is mid-navigation or unreadable.
+ *
+ * @param {import("playwright").Page} page
+ * @returns {Promise<Array<Object>>}
+ */
+async function readBufferFromPage(page) {
+  try {
+    return await page.evaluate((cfg) => {
+      function parse(s) {
+        try {
+          var a = s ? JSON.parse(s) : [];
+          return Array.isArray(a) ? a : [];
+        } catch (e) {
+          return [];
+        }
+      }
+      var best = [];
+      try {
+        var ls = parse(window.localStorage.getItem(cfg.storageKey));
+        if (ls.length > best.length) best = ls;
+      } catch (e) {
+        /* blocked */
+      }
+      try {
+        var ss = parse(window.sessionStorage.getItem(cfg.storageKey));
+        if (ss.length > best.length) best = ss;
+      } catch (e) {
+        /* blocked */
+      }
+      var w = window[cfg.bufferKey] || [];
+      if (w.length > best.length) best = w;
+      return best;
+    }, RECORDER_CONFIG);
+  } catch (err) {
+    log.warn("recorder: read buffer from page failed", { error: String(err) });
+    return [];
+  }
 }
 
 /** Strip in-page bookkeeping (_key) and coerce captured values to strings. */
@@ -576,9 +647,14 @@ function buildValueIndex(billingData) {
 
 /**
  * Map captured fill/select values to billing dataKeys. A typed value that equals an
- * assembled billing field becomes that dataKey (replay writes the NEW ticket's value);
- * an unmatched value is left as a literal (distill_recipe treats it as a staticValue —
- * e.g. a régimen choice). Click/navigate actions pass through untouched.
+ * assembled billing field becomes that dataKey, so replay writes the NEXT ticket's
+ * value — never the recording user's. An UNMATCHED fill/select is left without a
+ * dataKey, and distill_recipe now DROPS it (it no longer freezes the literal as a
+ * staticValue: that would write the recording user's data into another user's invoice
+ * on replay — see distillRecipe.js). Matching is kept deliberately precise (exact
+ * normalized string, numeric only for amounts) rather than fuzzy: a wrong match would
+ * write the wrong field, which is worse than dropping the step. Click/navigate pass
+ * through untouched.
  *
  * @param {Array<Object>} actions - Normalized recordedActions.
  * @param {Object} billingData - Assembled billingData (#56).
