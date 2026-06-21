@@ -179,11 +179,12 @@ export async function initNavigate(state) {
       detail: `navigated to ${url}${httpStatus ? ` (HTTP ${httpStatus})` : ""}`,
     };
   } finally {
-    // Only BROWSERBASE sessions have an id; a local dev browser (no id) is left
-    // open for the integration wave / inspection.
-    if (sessionId) {
-      // Drop our local CDP handle. keepAlive keeps the cloud session running, so
-      // a later node reconnects via the persisted sessionId/connectUrl.
+    // Drop our local CDP handle. On a BROWSERBASE session keepAlive keeps the cloud
+    // session running, so a later node reconnects via the persisted id/connectUrl. A
+    // LOCAL dev browser (no id) is intentionally left open ON SUCCESS for inspection —
+    // but on FAILURE we still close it, or the shell's NAV retries orphan a headed
+    // Chrome window per attempt.
+    if (sessionId || !succeeded) {
       await stagehand
         .close()
         .catch((err) =>
@@ -193,17 +194,17 @@ export async function initNavigate(state) {
             error: String(err),
           })
         );
-      // On failure, also release the cloud session so a leaked keepAlive session
-      // doesn't keep billing — the shell's retry opens a fresh one.
-      if (!succeeded) {
-        await closeSession(sessionId).catch((err) =>
-          log.warn("Failed to release session after navigation failure", {
-            ticketId: state.ticketId,
-            sessionId,
-            error: String(err),
-          })
-        );
-      }
+    }
+    // On a BROWSERBASE failure, also release the cloud session so a leaked keepAlive
+    // session doesn't keep billing — the shell's retry opens a fresh one.
+    if (sessionId && !succeeded) {
+      await closeSession(sessionId).catch((err) =>
+        log.warn("Failed to release session after navigation failure", {
+          ticketId: state.ticketId,
+          sessionId,
+          error: String(err),
+        })
+      );
     }
   }
 }

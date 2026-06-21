@@ -150,13 +150,39 @@ async function fillAndVerify(locator, value) {
   return false;
 }
 
-/** Choose a <select> option by value, then by label, verifying the readback. */
+/** The visible label (or text) of a <select>'s currently-selected option, or null. */
+async function selectedLabel(locator) {
+  try {
+    return await locator.evaluate((el) => {
+      if (el && el.tagName === "SELECT" && el.selectedIndex >= 0) {
+        const opt = el.options[el.selectedIndex];
+        return opt ? opt.label || opt.text || opt.value : null;
+      }
+      return null;
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Choose a <select> option by value, then by label, and verify. readback()/
+ * inputValue() returns the option's VALUE attribute, so a recipe value that is a
+ * human-readable LABEL (e.g. a régimen name) would never equal it and a correctly
+ * selected dropdown would be misread as drift — accept a match on EITHER the option
+ * value OR the selected option's visible label.
+ */
 async function selectAndVerify(locator, value) {
   const want = String(value);
+  const wantNorm = want.trim().toLowerCase();
   for (const arg of [want, { label: want }]) {
     try {
       await locator.selectOption(arg);
       if ((await readback(locator)) === want) return true;
+      const label = await selectedLabel(locator);
+      if (label != null && String(label).trim().toLowerCase() === wantNorm) {
+        return true;
+      }
     } catch {
       // try the next matching mode
     }

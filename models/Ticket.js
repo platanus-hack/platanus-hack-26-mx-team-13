@@ -76,6 +76,7 @@ const invoiceSchema = new mongoose.Schema(
 
     // Recipe
     recipeId: { type: String, default: null },
+    recipeFound: { type: Boolean, default: false },
     recipeUsed: { type: Boolean, default: false },
     recipeVersion: { type: Number, default: null },
 

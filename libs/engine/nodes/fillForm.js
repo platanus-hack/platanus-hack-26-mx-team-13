@@ -150,7 +150,7 @@ async function readbackValue(stagehand, selector) {
  * deterministic locator.fill() if the acted value didn't take. Returns the
  * outcome (selector + whether it verified) or null when no handle was found.
  */
-async function fillField(stagehand, label, valueStr) {
+async function fillField(stagehand, label, valueStr, fieldType) {
   const handles = await stagehand.observe(
     `Fill the "${label}" field with the value ${JSON.stringify(valueStr)}.`
   );
@@ -163,9 +163,18 @@ async function fillField(stagehand, label, valueStr) {
   let verified = valueWasWritten(await readbackValue(stagehand, selector), valueStr);
   if (!verified) {
     // The agent's action didn't land the exact value; write it deterministically
-    // against the selector we already have, then re-verify.
+    // against the selector we already have, then re-verify. A <select> rejects
+    // locator.fill() (Playwright throws "not an <input>") — choose the option instead,
+    // trying the visible label first, then the option value.
     try {
-      await getActivePage(stagehand).locator(selector).fill(valueStr);
+      const locator = getActivePage(stagehand).locator(selector);
+      if (String(fieldType).toLowerCase() === "select") {
+        await locator
+          .selectOption({ label: valueStr })
+          .catch(() => locator.selectOption(valueStr));
+      } else {
+        await locator.fill(valueStr);
+      }
       verified = valueWasWritten(
         await readbackValue(stagehand, selector),
         valueStr
@@ -299,7 +308,7 @@ export async function fillForm(state) {
         }
 
         try {
-          const outcome = await fillField(stagehand, label, valueStr);
+          const outcome = await fillField(stagehand, label, valueStr, fieldType);
           if (!outcome) {
             unfilledFields.push({ field: dataKey, reason: "field not found" });
             continue;

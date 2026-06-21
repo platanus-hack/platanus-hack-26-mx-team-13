@@ -115,7 +115,8 @@ const merchantRecipeSchema = new mongoose.Schema(
   }
 );
 
-// Number of consecutive-or-total failures after which a recipe self-deactivates.
+// Number of CONSECUTIVE failures after which a recipe self-deactivates. recordSuccess
+// resets the counter, so a recipe is only retired after MAX_FAILURES failures in a row.
 const MAX_FAILURES = 5;
 
 /**
@@ -143,7 +144,10 @@ merchantRecipeSchema.statics.recordSuccess = function recordSuccess(id) {
     id,
     {
       $inc: { usageCount: 1, successCount: 1 },
-      $set: { lastValidatedAt: new Date() },
+      // Reset failureCount on success so MAX_FAILURES counts CONSECUTIVE failures,
+      // not lifetime ones — a healthy, frequently-used recipe that flakes
+      // occasionally must not auto-deactivate after 5 scattered failures.
+      $set: { lastValidatedAt: new Date(), failureCount: 0 },
     },
     { new: true }
   );

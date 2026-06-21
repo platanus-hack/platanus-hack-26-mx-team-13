@@ -62,6 +62,7 @@ function buildInvoiceState(ticket) {
     liveViewUrl: null,
     waitpointTokenId: null,
     recipeId: null,
+    recipeFound: false,
     recipeUsed: false,
     recipeVersion: null,
     method: null,

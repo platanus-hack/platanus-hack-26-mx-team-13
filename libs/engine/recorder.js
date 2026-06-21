@@ -553,6 +553,12 @@ function numericKey(value) {
  * is the tie-break priority, so the first key carrying a value owns it. Registers
  * both a normalized-string key and a numeric key (so "$1,234.50" matches total 1234.5).
  */
+// Only genuine monetary amounts get a numeric (digits-only) index entry. Indexing
+// non-amounts (rfc, taxRegime, postalCode, folio, date) by their digits would let a
+// typed amount whose formatting differs from billingData's canonical string resolve
+// to the wrong field — e.g. a typed total "$123.00" mapping onto folio "A-123".
+const AMOUNT_KEYS = new Set(["total", "subtotal"]);
+
 function buildValueIndex(billingData) {
   const byString = new Map();
   const byNumber = new Map();
@@ -561,6 +567,7 @@ function buildValueIndex(billingData) {
     if (formatted == null || formatted === "") continue;
     const sk = normalize(formatted);
     if (sk && !byString.has(sk)) byString.set(sk, key);
+    if (!AMOUNT_KEYS.has(key)) continue;
     const nk = numericKey(formatted);
     if (nk && !byNumber.has(nk)) byNumber.set(nk, key);
   }

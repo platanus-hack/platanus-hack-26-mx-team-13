@@ -464,7 +464,13 @@ export async function reachForm(state) {
     // Phase 1 — DOM blocker check (free). A blocked landing page fails fast with a
     // classified, correctly human-resolvable error; no point spending AI on it.
     const landingBlocker = classifyBlocker(landingSignals);
-    if (landingBlocker) {
+    // A page that already IS the fillable form must not be declared blocked by a mere
+    // TEXT mention of a blocker keyword (e.g. form copy "si aparece un captcha,
+    // resuélvelo", or stray error/404 wording). Only a real captcha WIDGET genuinely
+    // blocks a form that's right there; otherwise defer to the Phase 2 real-form check.
+    const formDespiteText =
+      isRealForm(landingSignals) && !landingSignals?.hasCaptchaWidget;
+    if (landingBlocker && !formDespiteText) {
       throw engineError(
         `Portal blocked before the form (${landingBlocker})`,
         landingBlocker
