@@ -23,10 +23,12 @@
 //     means the portal no longer matches the recipe → abort immediately.
 //
 // Outcome:
-//   - All structural steps ran and every value-bearing field verified →
+//   - At least one value-bearing field filled, no structural failure, no drift →
 //     recordSuccess() and report a recipe-method fill.
-//   - A structural step failed, or a value-bearing field drifted → recordFailure()
-//     and throw RECIPE_REPLAY_FAILED so the shell falls back to an AI fill.
+//   - A structural step failed, a value-bearing field drifted, or the replay filled
+//     ZERO fields (every data step had no billing value → an empty form) →
+//     recordFailure() and throw RECIPE_REPLAY_FAILED so the shell falls back to an
+//     AI fill (never short-circuiting to submit on a blank form).
 //
 // NOTE: the node reconnects to the session via state.browserbaseSessionId — the
 // sanctioned way for a later node to pick the run back up (see libs/engine/session.js).
@@ -353,6 +355,23 @@ export async function replayRecipe(state) {
       const reason = `could not fill ${result.unfilledFields.length} field(s); portal likely changed`;
       await MerchantRecipe.recordFailure(recipe._id, reason);
       log.warn("Recipe replay incomplete", { ticketId: state.ticketId, recipeId, reason });
+      throw engineError(reason, ENGINE_ERRORS.RECIPE_REPLAY_FAILED.code);
+    }
+
+    // No structural step failed and nothing drifted, yet not a single value-bearing
+    // field was filled — every data step resolved to a missing billing value. The
+    // form is empty, so this is NOT a successful replay: reporting recipeUsed:true
+    // here would let the shell skip the AI/human fallback and advance to
+    // ready_to_submit on a blank form. Treat it as a replay miss and fall back.
+    if (result.filledFields.length === 0) {
+      const reason = `replay filled 0 field(s); no billing value resolved for any data step`;
+      await MerchantRecipe.recordFailure(recipe._id, reason);
+      log.warn("Recipe replay produced an empty form", {
+        ticketId: state.ticketId,
+        recipeId,
+        unfilled: result.unfilledFields.length,
+        reason,
+      });
       throw engineError(reason, ENGINE_ERRORS.RECIPE_REPLAY_FAILED.code);
     }
 
