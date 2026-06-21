@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { BILLING_DATA_KEYS } from "@/libs/engine/billingDataKeys";
 import toJSON from "./plugins/toJSON.js";
 
 // MerchantRecipe — the deterministic playbook for invoicing one merchant,
@@ -18,23 +19,13 @@ const STEP_ACTIONS = [
   "keypress",
 ];
 
-// Logical billing keys a `fill`/`select` step pulls its value from (see the
-// billingData assembler). `null` means the step uses `staticValue` instead.
-const DATA_KEYS = [
-  "rfc",
-  "businessName",
-  "taxRegime",
-  "postalCode",
-  "cfdiUsage",
-  "paymentMethod",
-  "email",
-  "folio",
-  "total",
-  "subtotal",
-  "date",
-  "sucursal",
-  "terminal",
-];
+// Logical billing keys a `fill`/`select` step pulls its value from. Derived from
+// the billingData assembler's BILLING_DATA_KEYS (single source of truth) so the
+// recipe schema can never drift from the values the fill step can actually
+// resolve — a key like `taxRegimeFormatted` missing here would reject an
+// otherwise-valid distilled recipe at save time. `null` (in the step enum below)
+// means the step uses `staticValue` instead of a dataKey.
+const DATA_KEYS = BILLING_DATA_KEYS;
 
 // How to locate the target element. Multiple strategies are kept so replay can
 // fall back (css → xpath → text) and self-healing can re-match by attributes.
