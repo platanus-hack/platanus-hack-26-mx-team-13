@@ -42,9 +42,12 @@ const NAV_MAX_ATTEMPTS = 3;
 const FILL_MAX_ATTEMPTS = 2;
 
 // How long a human handoff stays open before the waitpoint times out and the run
-// fails. Aligned with the keepAlive session lifetime (session.js, 1h): past it the
-// Browserbase session is gone, so there's nothing left for a human to resume into.
-const HANDOFF_TIMEOUT = "1h";
+// fails (which closes the Browserbase session). The run itself holds NO compute
+// while suspended, but the keepAlive session keeps streaming and burning
+// Browserbase minutes the whole time — so cap this well under the 1h session
+// lifetime (session.js) to abandon an unattended handoff quickly instead of
+// idling a live browser for an hour.
+const HANDOFF_TIMEOUT = "10m";
 
 // Build the initial InvoiceState for a ticket. Mirrors the InvoiceState typedef
 // in libs/engine/state.js; seeds the merchant identity from the OCR extraction.
