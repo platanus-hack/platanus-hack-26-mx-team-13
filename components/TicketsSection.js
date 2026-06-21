@@ -17,7 +17,7 @@ const PREVIEW_LIMIT = 5;
  * `onUploaded`, which refetches the list so the freshly-read ticket appears
  * with its extracted fields and status.
  */
-export default function TicketsSection({ compact = false }) {
+export default function TicketsSection({ compact = false, reloadKey = 0 }) {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   // The ticket whose detail modal is open (null = closed).
@@ -37,9 +37,11 @@ export default function TicketsSection({ compact = false }) {
     }
   }, []);
 
+  // Reload on mount and whenever reloadKey bumps (e.g. the parent just finished an
+  // upload) so a freshly-uploaded ticket appears without a manual hard refresh.
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, reloadKey]);
 
   // Merge a refreshed ticket (from a live invoice run) back into the list and,
   // if it's the open one, the modal — so the chip and modal stay in sync.

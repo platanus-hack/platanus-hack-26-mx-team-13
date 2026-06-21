@@ -1,21 +1,48 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Search, ChevronRight, X, Download, Mail } from "lucide-react";
+import { Search, ChevronRight, X } from "lucide-react";
 import { Button, Badge, FilterTabs } from "@/components/ui";
 import { UploadFlow } from "@/components/upload/UploadFlow";
+import InvoiceProgress from "@/components/InvoiceProgress";
 import { formatTotal, formatDate, formatDateTime } from "@/components/ticketFormat";
 
-// Status mapping
+// Receipt-lifecycle chips — shown only BEFORE an invoice run exists.
 const STATUS_CONFIG = {
-  ocr_done: { label: "Leido", tone: "info", thumbBg: "var(--amber-100)", thumbColor: "var(--amber-600)" },
-  uploaded: { label: "Subido", tone: "neutral", thumbBg: "var(--warm-100)", thumbColor: "var(--warm-700)" },
-  failed: { label: "Con error", tone: "danger", thumbBg: "var(--coral-100)", thumbColor: "#B23D14" },
-  invoiced: { label: "Facturado", tone: "success", thumbBg: "var(--green-100)", thumbColor: "var(--green-700)" },
+  ocr_done: { label: "Leido", tone: "info" },
+  uploaded: { label: "Subido", tone: "neutral" },
+  failed: { label: "Con error", tone: "danger" },
+  invoiced: { label: "Facturado", tone: "success" },
 };
 
+// Unified status chip for a ticket: the invoice RUN status wins when a run exists
+// (so the list/modal show "Factura generada" / "Falló" / "Generando…" instead of the
+// receipt-level "Leido" forever). Returns a Badge-compatible { label, tone }.
+function statusFor(ticket) {
+  const inv = ticket.invoice;
+  if (inv?.status) {
+    switch (inv.status) {
+      case "done":
+        return { label: "Factura generada", tone: "success" };
+      case "failed":
+        return {
+          label: inv.errorType === "ALREADY_INVOICED" ? "Ya facturado" : "Fallo",
+          tone: "danger",
+        };
+      case "ready_to_submit":
+        return { label: "Lista para enviar", tone: "info" };
+      case "awaiting_human":
+        return { label: "Requiere tu ayuda", tone: "warning" };
+      default:
+        // queued / resolving_portal / navigating / reaching_form / replaying / ...
+        return { label: "Generando...", tone: "info" };
+    }
+  }
+  return STATUS_CONFIG[ticket.status] || STATUS_CONFIG.uploaded;
+}
+
 function TicketRow({ ticket, onClick }) {
-  const config = STATUS_CONFIG[ticket.status] || STATUS_CONFIG.uploaded;
+  const config = statusFor(ticket);
   const e = ticket.extracted || {};
 
   return (
@@ -77,8 +104,10 @@ function TicketRow({ ticket, onClick }) {
   );
 }
 
-function TicketDetailModal({ ticket, onClose }) {
-  const config = STATUS_CONFIG[ticket.status] || STATUS_CONFIG.uploaded;
+function TicketDetailModal({ ticket, onClose, onChange }) {
+  const config = statusFor(ticket);
+  // OCR-level failure (unreadable receipt) — distinct from an invoice-run failure,
+  // which InvoiceProgress surfaces below the fields.
   const isFailed = ticket.status === "failed";
   const e = ticket.extracted || {};
 
@@ -194,13 +223,12 @@ function TicketDetailModal({ ticket, onClose }) {
                     </div>
                   ))}
                 </div>
-                <div className="mt-auto pt-[18px] flex flex-col gap-2.5">
-                  <Button variant="primary" fullWidth iconLeft={<Download className="w-4 h-4" />}>
-                    Descargar XML + PDF
-                  </Button>
-                  <Button variant="ghost" size="sm" fullWidth iconLeft={<Mail className="w-4 h-4" />}>
-                    Enviar por correo
-                  </Button>
+                {/* Real engine actions: generate (when read), live status + the
+                    read-only browser view while it runs, and the working PDF/XML
+                    downloads once the CFDI is collected. Replaces the static mockup
+                    buttons that never did anything. */}
+                <div className="mt-auto pt-[18px]">
+                  <InvoiceProgress ticket={ticket} onChange={onChange} />
                 </div>
               </>
             ) : (
@@ -255,6 +283,13 @@ export default function TicketsView() {
   useEffect(() => {
     loadTickets();
   }, [loadTickets]);
+
+  // Merge a refreshed ticket (from a live invoice run inside the modal) back into
+  // the table and the open modal so the row chip + modal stay in sync.
+  const patchTicket = useCallback((updated) => {
+    setTickets((prev) => prev.map((t) => (t.id === updated.id ? { ...t, ...updated } : t)));
+    setSelectedTicket((cur) => (cur && cur.id === updated.id ? { ...cur, ...updated } : cur));
+  }, []);
 
   // Counts
   const counts = {
@@ -409,7 +444,11 @@ export default function TicketsView() {
 
       {/* Detail modal */}
       {selectedTicket && (
-        <TicketDetailModal ticket={selectedTicket} onClose={() => setSelectedTicket(null)} />
+        <TicketDetailModal
+          ticket={selectedTicket}
+          onClose={() => setSelectedTicket(null)}
+          onChange={patchTicket}
+        />
       )}
 
       {/* Upload modal */}

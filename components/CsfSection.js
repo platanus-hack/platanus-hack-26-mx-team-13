@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import CsfUpload from "@/components/CsfUpload";
 import { getTaxRegimeName } from "@/data/sat-catalogs";
@@ -20,6 +21,7 @@ import { getTaxRegimeName } from "@/data/sat-catalogs";
 export default function CsfSection({ initialCompany = null, compact = false }) {
   const [company, setCompany] = useState(initialCompany);
   const [isExtracting, setIsExtracting] = useState(false);
+  const router = useRouter();
 
   async function handleUploaded(key) {
     setIsExtracting(true);
@@ -39,6 +41,10 @@ export default function CsfSection({ initialCompany = null, compact = false }) {
       }
 
       setCompany(body.company);
+      // In compact mode the visible profile card is the parent's (server-rendered
+      // `company` prop), not this component's state — refresh so it picks up the
+      // newly-saved CSF without a manual hard reload.
+      router.refresh();
       toast.success("Perfil fiscal guardado", { id: toastId });
     } catch (error) {
       toast.error(error.message || "Algo salio mal", { id: toastId });

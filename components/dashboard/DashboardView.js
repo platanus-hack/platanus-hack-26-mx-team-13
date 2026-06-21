@@ -11,6 +11,8 @@ import { getTaxRegimeName } from "@/data/sat-catalogs";
 
 export default function DashboardView({ user, company }) {
   const [showUpload, setShowUpload] = useState(false);
+  // Bumped when an upload finishes so the "Recientes" list reloads (no hard refresh).
+  const [reloadKey, setReloadKey] = useState(0);
   const firstName = user?.name?.split(" ")[0] || "Usuario";
 
   // Get fiscal profile data from company prop using correct field names
@@ -163,13 +165,20 @@ export default function DashboardView({ user, company }) {
             </div>
 
             {/* Uses existing TicketsSection component for ticket list */}
-            <TicketsSection compact />
+            <TicketsSection compact reloadKey={reloadKey} />
           </Card>
         </div>
       </div>
 
-      {/* Upload modal */}
-      {showUpload && <UploadFlow onClose={() => setShowUpload(false)} />}
+      {/* Upload modal — on close, reload the "Recientes" list so the new ticket shows. */}
+      {showUpload && (
+        <UploadFlow
+          onClose={() => {
+            setShowUpload(false);
+            setReloadKey((k) => k + 1);
+          }}
+        />
+      )}
     </>
   );
 }
