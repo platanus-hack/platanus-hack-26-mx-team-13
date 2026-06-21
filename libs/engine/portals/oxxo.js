@@ -147,19 +147,27 @@ async function pickSaleDate(page, dateValue) {
   await page.locator(E("fecha_input")).first().click({ timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(900);
 
-  // Navigate to the target month/year (bounded so a parse miss can't loop forever).
-  const targetTitle = `${MONTHS_ES[parts.month0]} ${parts.year}`;
+  // Navigate to the target month/year. Compare PARSED (month, year) ordinals — NOT
+  // the rendered title string. jQuery-UI renders the title with a NON-BREAKING space
+  // ("Junio 2026"), so an exact match against "junio 2026" (regular space) never
+  // fired: this loop used to click "next" 24× with the picker sitting open (~20s) even
+  // when ALREADY on the right month — the single biggest delay before filling.
+  // Normalizing whitespace (\s also matches NBSP) makes the parse robust, and breaking
+  // on cur===tgt exits immediately in the common current-month case (hop 0).
+  const tgt = parts.year * 12 + parts.month0;
   for (let hop = 0; hop < 24; hop++) {
     const title = (
       await page.locator(".ui-datepicker-title").first().innerText().catch(() => "")
-    ).trim().toLowerCase();
-    if (!title || title === targetTitle) break;
-    // Decide direction by comparing (year, month) ordinals.
+    )
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (!title) break; // can't read the title — stop spinning; the day click still tries
     const m = /([a-záéíóú]+)\s+(\d{4})/i.exec(title);
     const curMonth = m ? MONTHS_ES.indexOf(m[1].toLowerCase()) : parts.month0;
     const curYear = m ? +m[2] : parts.year;
     const cur = curYear * 12 + curMonth;
-    const tgt = parts.year * 12 + parts.month0;
+    if (cur === tgt) break; // already on the target month (the common case) — done
     const btn = cur > tgt ? ".ui-datepicker-prev" : ".ui-datepicker-next";
     await page.locator(btn).first().click({ timeout: 3000 }).catch(() => {});
     await page.waitForTimeout(500);
