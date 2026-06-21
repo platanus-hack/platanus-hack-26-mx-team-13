@@ -390,6 +390,20 @@ export const processInvoiceTask = task({
     //     every other merchant keeps the normal pipeline below.
     if (!handedOff && getPortalDriver(state.rfcEmisor)) {
       if (await stepWithRetry("deliver_invoice", deliverInvoice, FILL_MAX_ATTEMPTS)) {
+        // Terminal success: the CFDI is generated, collected, and stored. Unlike
+        // the human-confirm paths (awaiting_human / ready_to_submit) NOBODY needs
+        // the browser anymore, so release the keepAlive Browserbase session now —
+        // it bills (and streams) until explicitly released, otherwise lingering the
+        // full session lifetime. deliver_invoice already dropped its local CDP
+        // handle; this REQUEST_RELEASEs the cloud session.
+        if (state.browserbaseSessionId) {
+          await closeSession(state.browserbaseSessionId).catch((err) =>
+            log.warn("process-invoice: closeSession after delivery failed", {
+              ticketId,
+              error: String(err),
+            })
+          );
+        }
         log.info("process-invoice finished (portal driver)", {
           ticketId,
           status: state.status,
