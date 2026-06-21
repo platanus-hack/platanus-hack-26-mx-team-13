@@ -19,7 +19,10 @@ import {
   getLiveViewUrl,
   reconnectSession,
   closeSession,
+  getActivePage,
 } from "@/libs/engine/session";
+import { assembleBillingData } from "@/libs/engine/billingData";
+import { attachRecorder, drainRecordedActions } from "@/libs/engine/recorder";
 import {
   resolvePortal,
   initNavigate,
@@ -224,6 +227,28 @@ export const processInvoiceTask = task({
         hasLiveView: Boolean(liveViewUrl),
       });
 
+      // Inject the action recorder so the human's clicks/fills in the Live View are
+      // captured (multi-strategy selectors + values) for distillation. It buffers
+      // in-page (window + sessionStorage) and re-injects on each navigation, so it
+      // keeps recording while this run is suspended on the waitpoint below — no Node
+      // is connected then. On resume we reconnect and drain the buffer. Best-effort:
+      // a failure here just means the recipe falls back to whatever the client posts.
+      if (state.browserbaseSessionId) {
+        try {
+          const { stagehand } = await reconnectSession(state.browserbaseSessionId);
+          try {
+            await attachRecorder(getActivePage(stagehand));
+          } finally {
+            await stagehand.close().catch(() => {});
+          }
+        } catch (err) {
+          log.warn("process-invoice: could not attach recorder for handoff", {
+            ticketId,
+            error: String(err),
+          });
+        }
+      }
+
       // Suspend durably until the human resolves it. forToken resolves with the
       // data the resume route passed to completeToken.
       const result = await wait.forToken(token);
@@ -237,30 +262,54 @@ export const processInvoiceTask = task({
         return false;
       }
 
-      // The human worked the form live; fold in any actions the resume route
-      // captured and mark the run human-driven so distill records a human recipe.
+      // The human worked the form live; mark the run human-driven so distill records
+      // a human recipe (recordedVia:'human').
       const resumed = result.output || {};
-      const mergedActions = [
-        ...(state.recordedActions || []),
-        ...(Array.isArray(resumed.recordedActions) ? resumed.recordedActions : []),
-      ];
 
-      // Reconnect to the same keepAlive session the human used — parity with the
-      // other nodes and a liveness check after the handoff. Drop the local handle
-      // immediately (keepAlive keeps the cloud session for the confirmed-submit
-      // step). Best-effort: distill works off state even if the session expired
-      // (Browserbase drops idle CDP after ~10 min).
+      // Reconnect to the same keepAlive session the human used and drain the
+      // recorder's buffer — the human's clicks/fills as recordedActions, each value
+      // mapped to a billing dataKey (#56). Drop the local handle immediately
+      // (keepAlive keeps the cloud session for the confirmed-submit step).
+      // Best-effort: distill works off state even if the session expired or nothing
+      // was captured (Browserbase drops idle CDP after ~10 min).
+      let capturedActions = [];
       if (state.browserbaseSessionId) {
         try {
           const { stagehand } = await reconnectSession(state.browserbaseSessionId);
-          await stagehand.close().catch(() => {});
+          try {
+            // billingData drives value→dataKey mapping; unavailable is non-fatal
+            // (actions still distill, with literal staticValues instead of dataKeys).
+            let billingData = null;
+            try {
+              billingData = await assembleBillingData(state.ticketId, state.userId);
+            } catch (err) {
+              log.warn("process-invoice: billingData unavailable for recorder mapping", {
+                ticketId,
+                error: String(err),
+              });
+            }
+            capturedActions = await drainRecordedActions(
+              getActivePage(stagehand),
+              billingData
+            );
+          } finally {
+            await stagehand.close().catch(() => {});
+          }
         } catch (err) {
-          log.warn("process-invoice: reconnect after handoff failed", {
+          log.warn("process-invoice: drain recorder after handoff failed", {
             ticketId,
             error: String(err),
           });
         }
       }
+
+      // Fold the server-captured actions (the real source) plus any the resume route
+      // received from the client into the run's recordedActions for distillation.
+      const mergedActions = [
+        ...(state.recordedActions || []),
+        ...capturedActions,
+        ...(Array.isArray(resumed.recordedActions) ? resumed.recordedActions : []),
+      ];
 
       await persist({
         method: INVOICE_METHOD.HUMAN,

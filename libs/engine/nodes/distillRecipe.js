@@ -86,17 +86,46 @@ function match1(value, re) {
 }
 
 /**
- * Turn a raw string selector (as Stagehand observe()/the agent hands them back)
- * into the recipe's multi-strategy selector shape { css, xpath, text, attributes }.
- * XPath strings (the common Stagehand form) land in `xpath`; everything else is
- * treated as CSS, from which we also recover id/name/aria-label/placeholder/type
- * attributes so replay's resolveSelector has fallback strategies to self-heal with.
+ * Normalize an already-structured multi-strategy selector (e.g. from the human
+ * recorder, libs/engine/recorder.js) onto the recipe's selector shape, keeping only
+ * the strategies actually present so it mirrors the string path's output.
  *
- * @param {string|null|undefined} raw
+ * @param {Object} sel - A { css, xpath, text, attributes } selector partial.
+ * @returns {Object|null}
+ */
+function normalizeSelectorObject(sel) {
+  const out = {};
+  if (sel.css) out.css = String(sel.css);
+  if (sel.xpath) out.xpath = String(sel.xpath).replace(/^xpath=/i, "");
+  if (sel.text) out.text = String(sel.text);
+
+  const a = sel.attributes || {};
+  const attributes = {};
+  for (const k of ["id", "name", "ariaLabel", "placeholder", "type"]) {
+    if (a[k] != null && a[k] !== "") attributes[k] = String(a[k]);
+  }
+  if (Object.keys(attributes).length) out.attributes = attributes;
+
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Turn a selector into the recipe's multi-strategy shape { css, xpath, text,
+ * attributes }. Accepts either a structured selector object (the human recorder
+ * already computes all strategies — pass it straight through) or a raw string (as
+ * Stagehand observe()/the agent hands them back). For a string, XPath forms land in
+ * `xpath`; everything else is treated as CSS, from which we also recover
+ * id/name/aria-label/placeholder/type attributes so replay's resolveSelector has
+ * fallback strategies to self-heal with.
+ *
+ * @param {string|Object|null|undefined} raw
  * @returns {Object|null} A selector partial, or null when there's nothing to target.
  */
 function toRecipeSelector(raw) {
   if (raw == null) return null;
+  // Already a structured multi-strategy selector (human recorder) — keep all strategies.
+  if (typeof raw === "object") return normalizeSelectorObject(raw);
+
   const selector = String(raw).trim();
   if (!selector) return null;
 
