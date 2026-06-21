@@ -46,7 +46,7 @@ function Logo({ size = "md" }) {
 // Hero section
 function HeroSection() {
   return (
-    <section className="relative min-h-screen overflow-hidden" style={{ background: "var(--espresso-900)" }}>
+    <section id="top" className="relative min-h-screen overflow-hidden" style={{ background: "var(--espresso-900)" }}>
       {/* Animated background */}
       <div className="absolute inset-[-12%] z-0 blur-[8px]">
         <div className="absolute inset-0 bg-gradient-to-br from-[#0C4824] via-[#0F7A38] via-[26%] via-[#5E9A3C] via-[44%] via-[#F5A524] via-[68%] to-[#B23D14]" />
@@ -88,10 +88,10 @@ function HeroSection() {
       />
 
       {/* Content */}
-      <div className="relative z-[2] max-w-[1240px] mx-auto px-8">
+      <div className="relative z-[2] max-w-[1240px] mx-auto px-5 md:px-8">
         {/* Nav */}
         <header
-          className="flex items-center gap-4 mt-[22px] py-2 pr-2 pl-[22px] rounded-full"
+          className="flex items-center gap-3 md:gap-4 mt-[22px] py-2 pr-2 pl-4 md:pl-[22px] rounded-full"
           style={{
             background: "rgba(251,250,247,.92)",
             backdropFilter: "blur(10px)",
@@ -101,19 +101,22 @@ function HeroSection() {
         >
           <Logo size="sm" />
           <nav className="hidden md:flex items-center gap-1 ml-2">
-            {["Producto", "Como funciona", "Precios", "Empresas"].map((item) => (
+            {[
+              { label: "Como funciona", href: "#como-funciona" },
+              { label: "Comercios", href: "#comercios" },
+            ].map((item) => (
               <a
-                key={item}
-                href="#"
-                className="py-2 px-3.5 rounded-full text-[15px] font-medium no-underline transition-colors"
+                key={item.label}
+                href={item.href}
+                className="py-2 px-3.5 rounded-full text-[15px] font-medium no-underline transition-colors hover:bg-[var(--bg-subtle)]"
                 style={{ color: "var(--text-body)" }}
               >
-                {item}
+                {item.label}
               </a>
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="quiet" size="sm" as={Link} href="/api/auth/signin?callbackUrl=/dashboard">
+            <Button variant="quiet" size="sm" as={Link} href="/api/auth/signin?callbackUrl=/dashboard" className="hidden sm:inline-flex">
               Iniciar sesion
             </Button>
             <Button variant="primary" size="sm" arrow as={Link} href="/api/auth/signin?callbackUrl=/dashboard">
@@ -131,7 +134,7 @@ function HeroSection() {
               style={{
                 fontFamily: "var(--font-display)",
                 fontWeight: 800,
-                fontSize: "clamp(54px, 6.6vw, 96px)",
+                fontSize: "clamp(40px, 9vw, 96px)",
                 lineHeight: 0.95,
                 letterSpacing: "-0.035em",
               }}
@@ -165,7 +168,7 @@ function HeroSection() {
           </div>
 
           {/* Right: demo card */}
-          <div className="justify-self-end w-full max-w-[452px]" style={{ animation: "fct-float 7s ease-in-out infinite" }}>
+          <div className="justify-self-center md:justify-self-end mx-auto md:mx-0 w-full max-w-[452px]" style={{ animation: "fct-float 7s ease-in-out infinite" }}>
             <div
               className="rounded-[var(--radius-2xl)] overflow-hidden"
               style={{
@@ -298,7 +301,7 @@ function HeroSection() {
 
               {/* Card footer */}
               <div className="px-5 pb-4">
-                <Button variant="secondary" size="md" arrow fullWidth>
+                <Button variant="secondary" size="md" arrow fullWidth as={Link} href="#como-funciona">
                   Ver como funciona
                 </Button>
               </div>
@@ -321,9 +324,9 @@ function MerchantsSection() {
   ];
 
   return (
-    <section className="py-16" style={{ background: "var(--bg-page)" }}>
+    <section id="comercios" className="py-16" style={{ background: "var(--bg-page)" }}>
       <p
-        className="text-center mb-10 text-[13px] font-semibold uppercase px-8"
+        className="text-center mb-10 text-[13px] font-semibold uppercase px-5 md:px-8"
         style={{ letterSpacing: "0.1em", color: "var(--text-muted)" }}
       >
         Factura tus compras en los comercios de siempre
@@ -415,8 +418,8 @@ function HowItWorksSection() {
   ];
 
   return (
-    <section style={{ background: "var(--bg-page)" }}>
-      <div className="max-w-[1200px] mx-auto px-8 pt-[130px] pb-2">
+    <section id="como-funciona" style={{ background: "var(--bg-page)" }}>
+      <div className="max-w-[1200px] mx-auto px-5 md:px-8 pt-20 md:pt-[130px] pb-2">
         <div className="max-w-[820px]">
           <span
             className="inline-flex items-center gap-2 text-xs font-semibold uppercase"
@@ -448,7 +451,7 @@ function HowItWorksSection() {
 
       {/* Pinned scroller */}
       <div id="fctHiwWrap" className="relative h-[300vh]">
-        <div className="sticky top-0 min-h-screen max-w-[1200px] mx-auto grid lg:grid-cols-[0.82fr_1.18fr] gap-[60px] items-center p-12">
+        <div className="sticky top-0 min-h-screen max-w-[1200px] mx-auto grid lg:grid-cols-[0.82fr_1.18fr] gap-8 lg:gap-[60px] items-start lg:items-center px-5 py-10 md:p-12">
           {/* Steps */}
           <div>
             {steps.map((s, i) => (
@@ -682,15 +685,21 @@ function HowItWorksSection() {
 
 // Footer
 function FooterSection() {
+  const signinHref = "/api/auth/signin?callbackUrl=/dashboard";
   const links = {
-    Producto: ["Como funciona", "Precios", "Comercios", "Para empresas"],
-    Recursos: ["Centro de ayuda", "Guia del CFDI 4.0", "Estado del SAT", "API para developers"],
-    Empresa: ["Nosotros", "Blog", "Contacto", "Privacidad y terminos"],
+    Producto: [
+      { label: "Como funciona", href: "#como-funciona" },
+      { label: "Comercios", href: "#comercios" },
+    ],
+    Empezar: [
+      { label: "Crear cuenta", href: signinHref },
+      { label: "Iniciar sesion", href: signinHref },
+    ],
   };
 
   return (
-    <footer style={{ background: "var(--espresso-900)", color: "rgba(243,239,232,.72)" }}>
-      <div className="max-w-[1200px] mx-auto px-8 py-20">
+    <footer id="contacto" style={{ background: "var(--espresso-900)", color: "rgba(243,239,232,.72)" }}>
+      <div className="max-w-[1200px] mx-auto px-5 md:px-8 py-20">
         {/* CTA */}
         <div
           className="flex flex-wrap items-center justify-between gap-7 pb-16"
@@ -720,7 +729,7 @@ function FooterSection() {
         </div>
 
         {/* Link grid */}
-        <div className="grid grid-cols-2 md:grid-cols-[1.6fr_1fr_1fr_1fr] gap-10 py-14">
+        <div className="grid grid-cols-2 md:grid-cols-[1.8fr_1fr_1fr] gap-10 py-14">
           {/* Brand */}
           <div className="max-w-[300px] col-span-2 md:col-span-1">
             <Link href="/" className="flex items-center gap-2.5 no-underline">
@@ -749,14 +758,14 @@ function FooterSection() {
                 {title}
               </span>
               {items.map((item) => (
-                <a
-                  key={item}
-                  href="#"
+                <Link
+                  key={item.label}
+                  href={item.href}
                   className="text-[15px] no-underline hover:text-white transition-colors"
                   style={{ color: "rgba(243,239,232,.72)" }}
                 >
-                  {item}
-                </a>
+                  {item.label}
+                </Link>
               ))}
             </div>
           ))}
@@ -770,22 +779,19 @@ function FooterSection() {
           <span className="text-[13.5px]" style={{ color: "rgba(243,239,232,.5)" }}>
             2026 Facturin - CFDI 4.0 valido ante el SAT - Hecho en Mexico
           </span>
-          <div className="flex items-center gap-2.5">
-            {[{ label: "X", icon: "\uD835\uDD4F" }, { label: "Instagram", icon: "\u25CE" }, { label: "LinkedIn", icon: "in" }].map((s) => (
-              <a
-                key={s.label}
-                href="#"
-                aria-label={s.label}
-                className="w-9 h-9 rounded-full grid place-items-center text-sm no-underline transition-all border"
-                style={{
-                  borderColor: "rgba(255,255,255,.16)",
-                  color: "rgba(243,239,232,.72)",
-                }}
-              >
-                {s.icon}
-              </a>
-            ))}
-          </div>
+          <a
+            href="#top"
+            className="inline-flex items-center gap-2 text-[13.5px] font-medium no-underline transition-colors hover:text-white"
+            style={{ color: "rgba(243,239,232,.6)" }}
+          >
+            Volver arriba
+            <span
+              className="w-7 h-7 rounded-full grid place-items-center border"
+              style={{ borderColor: "rgba(255,255,255,.16)" }}
+            >
+              &#8593;
+            </span>
+          </a>
         </div>
       </div>
     </footer>
