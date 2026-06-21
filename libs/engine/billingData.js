@@ -33,8 +33,8 @@ import { engineError } from "./node.js";
  * @property {string|null} taxRegime - Primary SAT tax-regime code (e.g. "626").
  * @property {string|null} taxRegimeFormatted - Human-readable regime name for that code.
  * @property {string|null} postalCode - Fiscal address postal code (código postal).
- * @property {string|null} cfdiUsage - Uso de CFDI; not yet captured on Company → null for now.
- * @property {string|null} paymentMethod - Forma/método de pago; not yet captured on Company → null for now.
+ * @property {string|null} cfdiUsage - Uso de CFDI; defaults to "G03" (Gastos en general) since no Company field captures it yet — the most common uso for expense receipts.
+ * @property {string|null} paymentMethod - Forma/método de pago; prefers extracted.paymentMethod, else defaults to "PUE" (Pago en una sola exhibición).
  *
  * From User (account):
  * @property {string|null} email - Address the invoice (CFDI) should be sent to.
@@ -118,9 +118,14 @@ export async function assembleBillingData(ticketId, userId) {
     taxRegime: regimeCode,
     taxRegimeFormatted: getTaxRegimeName(regimeCode),
     postalCode: company.fiscalAddress?.postalCode ?? null,
-    // Not yet captured on Company; surfaced as null so the dataKey still resolves.
-    cfdiUsage: null,
-    paymentMethod: null,
+    // CFDI defaults: most portals REQUIRE these, so a null leaves the form
+    // incomplete. No Company field captures them yet, so we fall back to the
+    // most common SAT values for expense receipts.
+    // "G03" = Gastos en general (the usual uso de CFDI for expenses).
+    cfdiUsage: "G03",
+    // Prefer a value the OCR extracted from the ticket; else "PUE" = Pago en
+    // una sola exhibición (single-payment, by far the most common método).
+    paymentMethod: extracted.paymentMethod ?? "PUE",
 
     // User (account)
     email: user?.email ?? null,
