@@ -113,10 +113,10 @@ function HeroSection() {
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="quiet" size="sm" as={Link} href="/api/auth/signin">
+            <Button variant="quiet" size="sm" as={Link} href="/api/auth/signin?callbackUrl=/dashboard">
               Iniciar sesion
             </Button>
-            <Button variant="primary" size="sm" arrow as={Link} href="/api/auth/signin">
+            <Button variant="primary" size="sm" arrow as={Link} href="/api/auth/signin?callbackUrl=/dashboard">
               Crear cuenta
             </Button>
           </div>
@@ -146,7 +146,7 @@ function HeroSection() {
               Subele la foto de tu ticket y Facturin lee los datos, valida tu RFC y genera el CFDI por ti. Sin capturar nada a mano.
             </p>
             <div className="flex items-center gap-3.5 flex-wrap mt-8">
-              <Button variant="primary" size="lg" arrow as={Link} href="/api/auth/signin">
+              <Button variant="primary" size="lg" arrow as={Link} href="/api/auth/signin?callbackUrl=/dashboard">
                 Comenzar gratis
               </Button>
               <span className="text-sm font-medium" style={{ color: "rgba(243,239,232,.78)" }}>
@@ -710,7 +710,7 @@ function FooterSection() {
             Deja de capturar facturas a mano.
           </h2>
           <div className="flex items-center gap-3.5 flex-wrap">
-            <Button variant="primary" size="lg" arrow as={Link} href="/api/auth/signin">
+            <Button variant="primary" size="lg" arrow as={Link} href="/api/auth/signin?callbackUrl=/dashboard">
               Comenzar gratis
             </Button>
             <span className="text-sm font-medium" style={{ color: "rgba(243,239,232,.6)" }}>

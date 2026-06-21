@@ -44,6 +44,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
 
   callbacks: {
+    // Redirect to /dashboard after sign-in.
+    async redirect({ url, baseUrl }) {
+      // If the url is relative, prefix it with baseUrl
+      if (url.startsWith("/")) return `${baseUrl}${url}`;
+      // If same origin, allow it
+      if (new URL(url).origin === baseUrl) return url;
+      // Default to dashboard
+      return `${baseUrl}/dashboard`;
+    },
     // Carry the role onto the token at sign-in so it survives in the JWT.
     async jwt({ token, user }) {
       if (user) {
@@ -83,6 +92,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
   theme: {
     brandColor: config.colors.main,
-    logo: `https://${config.domainName}/logoAndName.png`,
+    logo: "/logoAndName.png",
   },
 });
