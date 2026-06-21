@@ -53,6 +53,19 @@ export async function POST(request, { params }) {
       );
     }
 
+    // The merchant RFC (rfcEmisor) is the key resolve_portal needs to find a
+    // portal; without it the run is guaranteed to fail fast with NO_URL. Reject up
+    // front instead of claiming the ticket and enqueueing a job that can only fail.
+    if (!ticket.extracted?.rfcEmisor) {
+      return NextResponse.json(
+        {
+          error:
+            "Ticket has no merchant RFC (rfcEmisor) — cannot resolve a portal to invoice",
+        },
+        { status: 422 }
+      );
+    }
+
     // Idempotent start: atomically claim the ticket by stamping a fresh queued
     // invoice, but only when no run is active (invoice is null or the last run
     // FAILED). A concurrent double-click / retry finds no matching doc and is
