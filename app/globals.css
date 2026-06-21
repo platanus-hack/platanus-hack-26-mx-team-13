@@ -252,6 +252,10 @@
   --font-mono: var(--font-mono);
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   background: var(--bg-page);
   color: var(--ink);
@@ -306,6 +310,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   *[style*="animation"] { animation: none !important; }
   .animate-float, .animate-marquee, .animate-spin, .animate-pulse { animation: none !important; }
 }
