@@ -118,6 +118,17 @@ export async function assembleBillingData(ticketId, userId) {
     taxRegime: regimeCode,
     taxRegimeFormatted: getTaxRegimeName(regimeCode),
     postalCode: company.fiscalAddress?.postalCode ?? null,
+    // Full fiscal address from the CSF (some portals, e.g. OXXO, ask for it).
+    street:
+      [company.fiscalAddress?.streetType, company.fiscalAddress?.streetName]
+        .filter(Boolean)
+        .join(" ") || null,
+    exteriorNumber: company.fiscalAddress?.exteriorNumber ?? null,
+    interiorNumber: company.fiscalAddress?.interiorNumber ?? null,
+    colonia: company.fiscalAddress?.neighborhood ?? null,
+    municipality: company.fiscalAddress?.municipality ?? null,
+    state: company.fiscalAddress?.state ?? null,
+    country: company.fiscalAddress?.country ?? null,
     // CFDI defaults: most portals REQUIRE these, so a null leaves the form
     // incomplete. No Company field captures them yet, so we fall back to the
     // most common SAT values for expense receipts.

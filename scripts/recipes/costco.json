@@ -1,0 +1,23 @@
+{
+  "merchantName": "COSTCO",
+  "normalizedName": "costco",
+  "rfcEmisor": "CME910715UB9",
+  "invoiceUrl": "https://www3.costco.com.mx/facturacion",
+  "recordedVia": "human",
+  "version": 3,
+  "isActive": true,
+  "notes": "Ticket = el numero GRANDE debajo del codigo de barras, NO el numero de orden (ej. 510). Regimen fiscal viene de la CSF del receptor (taxRegime). Uso CFDI: preguntar al usuario al subir (default G03). Costco exige facturar el MISMO dia. Sin focus-clicks: el fill/select ya enfoca, evita abortar el replay en campos ocultos.",
+  "steps": [
+    {"order":1,"action":"fill","selector":{"css":"#ticket","attributes":{"id":"ticket","name":"ticket","type":"text"}},"dataKey":"folio","staticValue":null,"description":"Ticket / Orden"},
+    {"order":2,"action":"fill","selector":{"css":"#monto","attributes":{"id":"monto","name":"monto","type":"text"}},"dataKey":"total","staticValue":null,"description":"Total pagado"},
+    {"order":3,"action":"fill","selector":{"css":"#rfc","attributes":{"id":"rfc","name":"rfc","type":"text"}},"dataKey":"rfc","staticValue":null,"description":"RFC"},
+    {"order":4,"action":"click","selector":{"css":"#btnEnviar","text":"Continuar","attributes":{"id":"btnEnviar","type":"button"}},"dataKey":null,"staticValue":null,"description":"Continuar (a datos fiscales)"},
+    {"order":5,"action":"fill","selector":{"css":"#razonSocial","attributes":{"id":"razonSocial","name":"razonSocial","type":"text"}},"dataKey":"businessName","staticValue":null,"description":"Nombre/Razon Social"},
+    {"order":6,"action":"fill","selector":{"css":"#codigoPostal","attributes":{"id":"codigoPostal","name":"codigoPostal","type":"text"}},"dataKey":"postalCode","staticValue":null,"description":"Codigo Postal"},
+    {"order":7,"action":"select","selector":{"css":"#regimenFiscal","attributes":{"id":"regimenFiscal","name":"regimenFiscal"}},"dataKey":"taxRegime","staticValue":null,"description":"Regimen Fiscal"},
+    {"order":8,"action":"select","selector":{"css":"#usoCFDI","attributes":{"id":"usoCFDI","name":"usoCFDI"}},"dataKey":"cfdiUsage","staticValue":null,"description":"Uso de CFDI"},
+    {"order":9,"action":"fill","selector":{"css":"#correo","attributes":{"id":"correo","name":"correo","type":"text"}},"dataKey":"email","staticValue":null,"description":"Correo Electronico"},
+    {"order":10,"action":"fill","selector":{"css":"#correoConfirmacion","attributes":{"id":"correoConfirmacion","name":"correoConfirmacion","type":"text"}},"dataKey":"email","staticValue":null,"description":"Confirmacion de Correo"}
+  ],
+  "submitButtonSelector": {"css":"#btnEnviar","text":"Solicitar","attributes":{"id":"btnEnviar","type":"button"}}
+}

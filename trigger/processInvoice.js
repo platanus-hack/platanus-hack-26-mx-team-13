@@ -378,8 +378,13 @@ export const processInvoiceTask = task({
       handedOff = true;
     }
 
-    // 3. Reach the invoicing form.
-    if (!handedOff && !(await step("reach_form", reachForm))) {
+    // 3. Reach the invoicing form. SKIP when a recipe will be replayed: the recipe's
+    //    own steps drive the portal from the landing page init_navigate left us on
+    //    (close dialogs, fill the lookup gate, click through), so the fragile AI
+    //    form-detection must NOT gate a deterministic replay — on heavy SPAs
+    //    (Costco/OXXO PrimeFaces) reach_form can fail to "see" the form and would
+    //    otherwise block the replay from ever running. AI fills still run reach_form.
+    if (!handedOff && !state.recipeId && !(await step("reach_form", reachForm))) {
       if (!isHumanResolvable(state.errorType)) return fail();
       if (!(await handoff())) return fail();
       handedOff = true;

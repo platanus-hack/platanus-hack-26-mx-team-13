@@ -22,6 +22,15 @@ export const BILLING_DATA_KEYS = Object.freeze([
   "cfdiUsage",
   "paymentMethod",
   "email",
+  // Fiscal address (from the CSF) — some portals (e.g. OXXO) ask for the full
+  // receptor address, not just the postal code. Sourced from Company.fiscalAddress.
+  "street",
+  "exteriorNumber",
+  "interiorNumber",
+  "colonia",
+  "municipality",
+  "state",
+  "country",
   "folio",
   "total",
   "subtotal",
