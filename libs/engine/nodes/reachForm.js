@@ -495,11 +495,19 @@ export async function reachForm(state) {
     const hit = await findFormPage(pages);
 
     if (hit) {
-      // Surface the form's tab so the downstream fill node lands on it.
+      // Surface the form's tab so the fill node lands on it. The fill node drives
+      // Stagehand's ACTIVE page (its AI methods take no explicit page), so mark the
+      // form tab active — not just bringToFront() — or a multi-tab navigation would
+      // leave the original landing tab active and the fill would run on the wrong page.
       try {
         await hit.page.bringToFront();
       } catch {
         // Non-fatal — the fill node reconnects and re-finds the page if needed.
+      }
+      try {
+        stagehand.context?.setActivePage?.(hit.page);
+      } catch {
+        // Non-fatal — activePage() falls back to the most-recent page.
       }
 
       const formUrl = safeUrl(hit.page);
