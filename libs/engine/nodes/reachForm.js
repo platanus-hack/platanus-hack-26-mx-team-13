@@ -32,7 +32,7 @@
 import { INVOICE_STATUS } from "@/libs/engine/state";
 import { ENGINE_ERRORS } from "@/libs/engine/errorTypes";
 import { engineError } from "@/libs/engine/node";
-import { reconnectSession } from "@/libs/engine/session";
+import { reconnectSession, getActivePage } from "@/libs/engine/session";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:reach-form" });
@@ -308,7 +308,11 @@ function collectPages(stagehand) {
   } catch {
     pages = [];
   }
-  if (!pages.length && stagehand.page) pages = [stagehand.page];
+  // Stagehand v3 has no stagehand.page; fall back to the context's active page.
+  if (!pages.length) {
+    const active = stagehand.context?.activePage?.();
+    if (active) pages = [active];
+  }
   return pages.filter(Boolean);
 }
 
@@ -453,7 +457,8 @@ export async function reachForm(state) {
   const recordedActions = [...(state.recordedActions || [])];
 
   try {
-    const page = stagehand.page;
+    // Stagehand v3 has no stagehand.page — resolve the live page off the context.
+    const page = getActivePage(stagehand);
     const landingSignals = await analyzePage(page);
 
     // Phase 1 — DOM blocker check (free). A blocked landing page fails fast with a

@@ -15,7 +15,12 @@
 import { INVOICE_STATUS } from "@/libs/engine/state";
 import { ENGINE_ERRORS } from "@/libs/engine/errorTypes";
 import { engineError } from "@/libs/engine/node";
-import { createSession, closeSession, screenshotToR2 } from "@/libs/engine/session";
+import {
+  createSession,
+  closeSession,
+  screenshotToR2,
+  getActivePage,
+} from "@/libs/engine/session";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:init-navigate" });
@@ -148,7 +153,8 @@ export async function initNavigate(state) {
 
   let succeeded = false;
   try {
-    const page = stagehand.page;
+    // Stagehand v3 has no stagehand.page — resolve the live page off the context.
+    const page = getActivePage(stagehand);
     const { url, httpStatus } = await navigateWithFallback(page, variants);
 
     // Capture what we landed on. Best-effort: a screenshot failure must not sink

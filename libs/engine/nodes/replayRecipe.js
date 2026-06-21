@@ -38,7 +38,7 @@ import { INVOICE_STATUS, INVOICE_METHOD } from "@/libs/engine/state";
 import { ENGINE_ERRORS } from "@/libs/engine/errorTypes";
 import { engineError } from "@/libs/engine/node";
 import { assembleBillingData, getBillingValue } from "@/libs/engine/billingData";
-import { reconnectSession } from "@/libs/engine/session";
+import { reconnectSession, getActivePage } from "@/libs/engine/session";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:replay-recipe" });
@@ -63,7 +63,7 @@ const KEYSTROKE_DELAY_MS = 25;
  * first strategy whose locator points at a visible element wins. Returns a
  * Playwright Locator, or null when nothing matches.
  *
- * @param {import("playwright").Page} page - The live page (stagehand.page).
+ * @param {import("playwright").Page} page - The live page (getActivePage()).
  * @param {Object} selector - A MerchantRecipe step selector (css/xpath/text/attributes).
  * @returns {Promise<import("playwright").Locator|null>}
  */
@@ -320,7 +320,8 @@ export async function replayRecipe(state) {
   }
 
   const { stagehand } = await reconnectSession(state.browserbaseSessionId);
-  const page = stagehand.page;
+  // Stagehand v3 has no stagehand.page — resolve the live page off the context.
+  const page = getActivePage(stagehand);
 
   let result;
   try {
