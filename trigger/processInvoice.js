@@ -163,6 +163,23 @@ export const processInvoiceTask = task({
       return summarize(state);
     };
 
+    // Best-effort fetch of the interactive live-view URL (Browserbase
+    // debuggerFullscreenUrl) for the current keepAlive session — the page a human
+    // drives during a handoff, and reviews/submits on ready_to_submit. Null when
+    // there's no session (local dev) or it has since expired.
+    const fetchLiveViewUrl = async () => {
+      if (!state.browserbaseSessionId) return null;
+      try {
+        return await getLiveViewUrl(state.browserbaseSessionId);
+      } catch (err) {
+        log.warn("process-invoice: could not get live view URL", {
+          ticketId,
+          error: String(err),
+        });
+        return null;
+      }
+    };
+
     // HITL handoff — durably suspend on a human-resolvable blocker (captcha,
     // login wall, a form we couldn't find/fill), let the person finish in the
     // SAME live Browserbase session, then resume. The waitpoint holds NO compute
@@ -170,19 +187,10 @@ export const processInvoiceTask = task({
     // converge on distill + ready_to_submit), or false if the handoff couldn't be
     // set up / timed out (the caller then fails the run).
     const handoff = async () => {
-      // The interactive live-view page the human drives. Best-effort: without it
-      // the dashboard loses the embedded view, but the handoff still works.
-      let liveViewUrl = null;
-      if (state.browserbaseSessionId) {
-        try {
-          liveViewUrl = await getLiveViewUrl(state.browserbaseSessionId);
-        } catch (err) {
-          log.warn("process-invoice: could not get live view URL", {
-            ticketId,
-            error: String(err),
-          });
-        }
-      }
+      // The interactive live-view page the human drives during the handoff.
+      // Best-effort: without it the dashboard loses the embedded view, but the
+      // handoff still works.
+      const liveViewUrl = await fetchLiveViewUrl();
 
       // Durable waitpoint the run suspends on. The resume route completes it when
       // the user clicks "Listo"; it times out so a run never hangs forever.
@@ -360,8 +368,19 @@ export const processInvoiceTask = task({
     // fires on an ai/recipe fill that found no submit control.)
     if (state.status === INVOICE_STATUS.AWAITING_HUMAN) {
       if (!(await handoff())) return fail();
-      await persist({ status: INVOICE_STATUS.READY_TO_SUBMIT });
     }
+
+    // Land in READY_TO_SUBMIT with a fresh interactive live view so the user can
+    // review the filled form and confirm submit in the SAME keepAlive session.
+    // Every path here would otherwise strand them with no browsable URL: the
+    // automated AI/recipe success never set a live view, and a human handoff
+    // cleared it on resume. (connectUrl is a CDP endpoint, not browsable, so the
+    // UI's "Revisar y enviar" needs this http(s) liveViewUrl.) Best-effort: a
+    // session that has since expired just leaves liveViewUrl null.
+    await persist({
+      status: INVOICE_STATUS.READY_TO_SUBMIT,
+      liveViewUrl: await fetchLiveViewUrl(),
+    });
 
     log.info("process-invoice finished", {
       ticketId,
