@@ -24,6 +24,7 @@ import { ENGINE_ERRORS } from "@/libs/engine/errorTypes";
 import { engineError } from "@/libs/engine/node";
 import connectMongoose from "@/libs/core/mongoose";
 import KnownMerchant from "@/models/KnownMerchant";
+import MerchantRecipe from "@/models/MerchantRecipe";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:resolve-portal" });
@@ -67,6 +68,18 @@ export async function resolvePortal(state) {
 
   await connectMongoose();
 
+  // Arm the deterministic replay path: the shell branches on state.recipeId, so a
+  // merchant with an active recipe must surface it here (we are already RFC-keyed
+  // and DB-connected) — otherwise every run, recipe or not, falls through to the
+  // costlier AI fill and the replay savings stay dead. We only carry the recipe's
+  // identity (id + version) as the gate; recipeUsed stays false until a replay
+  // actually succeeds (replay_recipe sets it), and replay_recipe re-loads the
+  // recipe itself, so a recipe that is deactivated before replay still falls back.
+  const activeRecipe = await MerchantRecipe.findActiveByRfc(rfcEmisor);
+  const recipeFields = activeRecipe
+    ? { recipeId: String(activeRecipe._id), recipeVersion: activeRecipe.version }
+    : {};
+
   // 1. Cache: a known merchant resolves instantly from the registry.
   const known = await KnownMerchant.findByRfc(rfcEmisor);
   if (known?.invoiceUrl) {
@@ -78,7 +91,10 @@ export async function resolvePortal(state) {
       status: INVOICE_STATUS.RESOLVING_PORTAL,
       portalUrl: known.invoiceUrl,
       urlSource: "cache",
-      detail: `cache hit — ${known.invoiceUrl}`,
+      ...recipeFields,
+      detail: `cache hit — ${known.invoiceUrl}${
+        activeRecipe ? ` (recipe v${activeRecipe.version})` : ""
+      }`,
     };
   }
 
@@ -107,7 +123,10 @@ export async function resolvePortal(state) {
       status: INVOICE_STATUS.RESOLVING_PORTAL,
       portalUrl: discovered,
       urlSource: "research",
-      detail: `discovered + persisted — ${discovered}`,
+      ...recipeFields,
+      detail: `discovered + persisted — ${discovered}${
+        activeRecipe ? ` (recipe v${activeRecipe.version})` : ""
+      }`,
     };
   }
 
