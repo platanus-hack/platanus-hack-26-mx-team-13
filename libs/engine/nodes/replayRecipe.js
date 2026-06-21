@@ -320,61 +320,77 @@ export async function replayRecipe(state) {
   }
 
   const { stagehand } = await reconnectSession(state.browserbaseSessionId);
-  // Stagehand v3 has no stagehand.page — resolve the live page off the context.
-  const page = getActivePage(stagehand);
 
-  let result;
   try {
-    result = await replaySteps(page, recipe.steps, billingData);
-  } catch (err) {
-    // An unexpected crash mid-replay — treat as drift and fall back to AI.
-    await MerchantRecipe.recordFailure(recipe._id, String(err?.message || err));
-    throw engineError(
-      `Recipe replay crashed: ${err?.message || err}`,
-      ENGINE_ERRORS.RECIPE_REPLAY_FAILED.code
-    );
+    // Stagehand v3 has no stagehand.page — resolve the live page off the context.
+    const page = getActivePage(stagehand);
+
+    let result;
+    try {
+      result = await replaySteps(page, recipe.steps, billingData);
+    } catch (err) {
+      // An unexpected crash mid-replay — treat as drift and fall back to AI.
+      await MerchantRecipe.recordFailure(recipe._id, String(err?.message || err));
+      throw engineError(
+        `Recipe replay crashed: ${err?.message || err}`,
+        ENGINE_ERRORS.RECIPE_REPLAY_FAILED.code
+      );
+    }
+
+    const recipeId = String(recipe._id);
+    const recipeVersion = recipe.version;
+
+    // A structural step failed → the portal no longer matches the recipe.
+    if (result.aborted) {
+      const reason = `aborted at ${result.aborted.action} step: ${result.aborted.reason}`;
+      await MerchantRecipe.recordFailure(recipe._id, reason);
+      log.warn("Recipe replay aborted", { ticketId: state.ticketId, recipeId, reason });
+      throw engineError(reason, ENGINE_ERRORS.RECIPE_REPLAY_FAILED.code);
+    }
+
+    // A field that had a value could not be placed/verified → recipe drift.
+    if (result.drifted) {
+      const reason = `could not fill ${result.unfilledFields.length} field(s); portal likely changed`;
+      await MerchantRecipe.recordFailure(recipe._id, reason);
+      log.warn("Recipe replay incomplete", { ticketId: state.ticketId, recipeId, reason });
+      throw engineError(reason, ENGINE_ERRORS.RECIPE_REPLAY_FAILED.code);
+    }
+
+    // Every structural step ran and every value-bearing field verified.
+    await MerchantRecipe.recordSuccess(recipe._id);
+    log.info("Recipe replayed", {
+      ticketId: state.ticketId,
+      recipeId,
+      recipeVersion,
+      filled: result.filledFields.length,
+      unfilled: result.unfilledFields.length,
+    });
+
+    return {
+      status: INVOICE_STATUS.REPLAYING,
+      method: INVOICE_METHOD.RECIPE,
+      recipeFound: true,
+      recipeUsed: true,
+      recipeId,
+      recipeVersion,
+      filledFields: result.filledFields,
+      unfilledFields: result.unfilledFields,
+      detail: `replayed recipe v${recipeVersion}: filled ${result.filledFields.length} field(s)`,
+    };
+  } finally {
+    // Drop our local CDP/SDK handle on every path (success or RECIPE_REPLAY_FAILED).
+    // keepAlive keeps the cloud session running, so the immediate AI fallback (or a
+    // later node / HITL) can reconnect to the SAME session — mirrors fill_form /
+    // reach_form. Best-effort: a close failure must not mask the replay's outcome.
+    try {
+      await stagehand.close();
+    } catch (err) {
+      log.warn("replay_recipe: stagehand close failed", {
+        ticketId: state.ticketId,
+        error: String(err),
+      });
+    }
   }
-
-  const recipeId = String(recipe._id);
-  const recipeVersion = recipe.version;
-
-  // A structural step failed → the portal no longer matches the recipe.
-  if (result.aborted) {
-    const reason = `aborted at ${result.aborted.action} step: ${result.aborted.reason}`;
-    await MerchantRecipe.recordFailure(recipe._id, reason);
-    log.warn("Recipe replay aborted", { ticketId: state.ticketId, recipeId, reason });
-    throw engineError(reason, ENGINE_ERRORS.RECIPE_REPLAY_FAILED.code);
-  }
-
-  // A field that had a value could not be placed/verified → recipe drift.
-  if (result.drifted) {
-    const reason = `could not fill ${result.unfilledFields.length} field(s); portal likely changed`;
-    await MerchantRecipe.recordFailure(recipe._id, reason);
-    log.warn("Recipe replay incomplete", { ticketId: state.ticketId, recipeId, reason });
-    throw engineError(reason, ENGINE_ERRORS.RECIPE_REPLAY_FAILED.code);
-  }
-
-  // Every structural step ran and every value-bearing field verified.
-  await MerchantRecipe.recordSuccess(recipe._id);
-  log.info("Recipe replayed", {
-    ticketId: state.ticketId,
-    recipeId,
-    recipeVersion,
-    filled: result.filledFields.length,
-    unfilled: result.unfilledFields.length,
-  });
-
-  return {
-    status: INVOICE_STATUS.REPLAYING,
-    method: INVOICE_METHOD.RECIPE,
-    recipeFound: true,
-    recipeUsed: true,
-    recipeId,
-    recipeVersion,
-    filledFields: result.filledFields,
-    unfilledFields: result.unfilledFields,
-    detail: `replayed recipe v${recipeVersion}: filled ${result.filledFields.length} field(s)`,
-  };
 }
 
 export default replayRecipe;
