@@ -32,6 +32,10 @@ export const INVOICE_STATUS = Object.freeze({
   DISTILLING: "distilling",
   READY_TO_SUBMIT: "ready_to_submit",
   DONE: "done",
+  // The CFDI was delivered to our catch-all inbox by the merchant portal and the
+  // XML/PDF is now stored in R2 (see libs/engine/invoiceMailbox.js). Set by the
+  // inbound email webhook, independent of the engine run's own progress.
+  DELIVERED: "delivered",
   FAILED: "failed",
 });
 

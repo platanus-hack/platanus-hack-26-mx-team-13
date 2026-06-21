@@ -10,8 +10,14 @@ const config = {
     main: "#16a34a",
   },
   resend: {
-    // 'From' field used when sending magic login links.
+    // 'From' field used when sending magic login links and invoice-delivery mail.
     fromNoReply: "Facturin <noreply@facturin.mx>",
+    // Catch-all subdomain for INBOUND CFDI delivery. When a merchant portal mails
+    // the invoice instead of offering a download, the fill step writes
+    // `<ticketId>@<receivingDomain>` into the portal's email field so we receive
+    // the XML/PDF. One MX record on this subdomain serves every ticket.
+    // Override at runtime with RESEND_RECEIVING_DOMAIN.
+    receivingDomain: "facturas.facturin.mx",
   },
 };
 

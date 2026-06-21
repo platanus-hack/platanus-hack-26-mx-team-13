@@ -107,6 +107,23 @@ const invoiceSchema = new mongoose.Schema(
     cost: { type: Number, default: 0 },
     screenshots: { type: [mongoose.Schema.Types.Mixed], default: [] },
 
+    // CFDI delivery (libs/engine/invoiceMailbox.js + the inbound email webhook).
+    // How the merchant portal hands back the invoice: "download" (we grab it from
+    // the page) or "email" (the portal mails it to our per-ticket catch-all
+    // address, captured by /api/email/inbound). null until known.
+    deliveryMode: {
+      type: String,
+      enum: ["download", "email", null],
+      default: null,
+    },
+    // R2 keys for the delivered artifacts, set once the inbound webhook stores them.
+    xmlKey: { type: String, default: null },
+    pdfKey: { type: String, default: null },
+    // Folio fiscal / UUID from the received CFDI, when parsed.
+    invoiceNumber: { type: String, default: null },
+    // When the CFDI landed in our inbox and was stored.
+    deliveredAt: { type: Date, default: null },
+
     // Failure detail
     error: { type: String, default: null },
     errorType: { type: String, enum: ENGINE_ERROR_CODES, default: null },
