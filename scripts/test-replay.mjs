@@ -18,6 +18,27 @@ const VALUES = {
   date: "21/06/2026", sucursal: "058", puntoVenta: "16", terminal: "16",
   cfdiUsage: "G03", paymentMethod: "PUE", taxRegime: "616",
 };
+// COMPANY_RFC=<rfc> overrides VALUES with the REAL CSF (Company) data, mirroring
+// assembleBillingData's fiscal-address mapping — proves the address dataKeys resolve.
+if (process.env.COMPANY_RFC) {
+  const { MongoClient } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 12000 });
+  await mc.connect();
+  const co = await mc.db().collection("companies").findOne({ rfc: process.env.COMPANY_RFC.toUpperCase() });
+  await mc.close();
+  if (co) {
+    const a = co.fiscalAddress || {};
+    Object.assign(VALUES, {
+      rfc: co.rfc, businessName: co.businessName,
+      postalCode: a.postalCode, street: [a.streetType, a.streetName].filter(Boolean).join(" "),
+      exteriorNumber: a.exteriorNumber, interiorNumber: a.interiorNumber, colonia: a.neighborhood,
+      municipality: a.municipality, state: a.state, country: a.country,
+      taxRegime: Array.isArray(co.taxRegime) ? co.taxRegime[0] : co.taxRegime,
+      email: "demo@facturin.mx",
+    });
+    console.log("Using REAL CSF for", co.rfc, "-", co.businessName, "| dir:", VALUES.street, VALUES.colonia, VALUES.municipality, VALUES.state, VALUES.postalCode);
+  } else console.log("COMPANY_RFC not found:", process.env.COMPANY_RFC);
+}
 const val = (k) => (k && VALUES[k] != null ? String(VALUES[k]) : "123456");
 
 const { Stagehand } = await import("@browserbasehq/stagehand");

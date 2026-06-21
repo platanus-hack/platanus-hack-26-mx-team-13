@@ -47,6 +47,7 @@ import { engineError } from "./node.js";
  * @property {string|null} sucursal - Branch/store identifier from the receipt (lookup gate).
  * @property {string|null} puntoVenta - Register/checkout/POS number from the receipt (lookup gate).
  * @property {string|null} terminal - Terminal identifier; not yet extracted → null for now.
+ * @property {string|null} venta - "ID de venta"/operation id from the receipt (some lookup gates require it).
  */
 
 // The closed set of recipe dataKeys — exactly the keys of a BillingData object.
@@ -150,6 +151,8 @@ export async function assembleBillingData(ticketId, userId) {
     puntoVenta: extracted.puntoVenta ?? null,
     // Not yet extracted from receipts; surfaced as null.
     terminal: extracted.terminal ?? null,
+    // "ID de venta" / operation id — required by some lookup gates (OXXO).
+    venta: extracted.venta ?? null,
   };
 }
 

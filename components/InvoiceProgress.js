@@ -245,6 +245,34 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
     );
   }
 
+  // Download links for the delivered CFDI (PDF + XML). The files are served from
+  // R2 by the auth-gated cfdi route, which sets Content-Disposition so a plain
+  // link downloads them. Rendered once the run is done and files are attached.
+  function cfdiDownloads() {
+    const cfdi = invoice?.cfdi;
+    if (!cfdi || (!cfdi.pdfKey && !cfdi.xmlKey)) return null;
+    const link = (type, label, palette) => (
+      <a
+        href={`/api/user/tickets/${ticket.id}/cfdi/${type}`}
+        download
+        onClick={(event) => event.stopPropagation()}
+        className={`rounded-full font-semibold transition-colors ${palette} ${sizeClass}`}
+      >
+        {label}
+      </a>
+    );
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        {cfdi.pdfKey
+          ? link("pdf", "Descargar PDF", "bg-red-600 text-white hover:bg-red-700")
+          : null}
+        {cfdi.xmlKey
+          ? link("xml", "Descargar XML", "bg-emerald-600 text-white hover:bg-emerald-700")
+          : null}
+      </div>
+    );
+  }
+
   function chipFor(status) {
     const chip = invoiceChip(status);
     return (
@@ -290,6 +318,7 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
         {invoice.status === INVOICE_STATUS.READY_TO_SUBMIT
           ? liveViewButton("Revisar y enviar", "ready")
           : null}
+        {invoice.status === INVOICE_STATUS.DONE ? cfdiDownloads() : null}
         {invoice.status === INVOICE_STATUS.FAILED ? generateButton : null}
       </div>
     );
@@ -411,9 +440,17 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
           ) : null}
 
           {invoice.status === INVOICE_STATUS.DONE ? (
-            <p className="text-sm font-medium text-green-700 dark:text-green-300">
-              La factura se generó correctamente.
-            </p>
+            <div className="flex flex-col gap-3">
+              <p className="text-sm font-medium text-green-700 dark:text-green-300">
+                La factura se generó correctamente.
+                {invoice.cfdi?.uuid ? (
+                  <span className="ml-1 font-normal text-zinc-500 dark:text-zinc-400">
+                    UUID {invoice.cfdi.uuid}
+                  </span>
+                ) : null}
+              </p>
+              {cfdiDownloads()}
+            </div>
           ) : null}
 
           {invoice.status === INVOICE_STATUS.FAILED ? (

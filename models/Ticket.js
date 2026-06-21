@@ -19,6 +19,10 @@ const extractedSchema = new mongoose.Schema(
     // Ticket-lookup fields most MX portals require before showing the fiscal form.
     sucursal: { type: String, default: null },
     puntoVenta: { type: String, default: null },
+    // "ID de venta" / operation id printed on the ticket (e.g. OXXO's "ID=...").
+    // Some gates require it alongside folio+total+date to validate the purchase;
+    // it isn't a generic billing dataKey, so the portal driver reads it from here.
+    venta: { type: String, default: null },
     // Forma/método de pago read off the ticket (e.g. EFECTIVO/TARJETA → SAT code).
     // Without this path the strict subdoc strips the OCR value on save (#102).
     paymentMethod: { type: String, default: null },
@@ -40,6 +44,25 @@ const stageSchema = new mongoose.Schema(
     detail: { type: String, default: null },
     errorType: { type: String, enum: ENGINE_ERROR_CODES, default: null },
     at: { type: String, default: null },
+  },
+  { _id: false }
+);
+
+// The delivered CFDI — the artifacts the user downloads once a portal generated
+// the invoice. Stored on invoice.cfdi by the deliver step (R2 keys, never bytes).
+const cfdiSchema = new mongoose.Schema(
+  {
+    // SAT folio fiscal (TimbreFiscalDigital UUID); null if the XML wasn't stamped.
+    uuid: { type: String, default: null },
+    // R2 object keys for the two artifacts the user downloads.
+    pdfKey: { type: String, default: null },
+    xmlKey: { type: String, default: null },
+    // Original filenames the portal served (Content-Disposition).
+    pdfName: { type: String, default: null },
+    xmlName: { type: String, default: null },
+    // CFDI total, copied for the dashboard without parsing the XML.
+    total: { type: Number, default: null },
+    deliveredAt: { type: String, default: null },
   },
   { _id: false }
 );
@@ -106,6 +129,9 @@ const invoiceSchema = new mongoose.Schema(
     stages: { type: [stageSchema], default: [] },
     cost: { type: Number, default: 0 },
     screenshots: { type: [mongoose.Schema.Types.Mixed], default: [] },
+
+    // Delivered CFDI (PDF + XML in R2). Null until the deliver step collects it.
+    cfdi: { type: cfdiSchema, default: null },
 
     // Failure detail
     error: { type: String, default: null },

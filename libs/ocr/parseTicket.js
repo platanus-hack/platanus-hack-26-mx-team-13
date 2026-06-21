@@ -34,6 +34,9 @@ const extractedSchema = z.object({
   // Forma de pago printed on the ticket (EFECTIVO/TARJETA/...). Mapped to a SAT
   // code when obvious; otherwise the raw printed string. Feeds the CFDI form.
   paymentMethod: z.string().nullable(),
+  // "ID de venta" / operation id (e.g. OXXO's "ID=10CHI50CEC1"). Some lookup gates
+  // require it to validate the purchase. Alphanumeric, kept verbatim.
+  venta: z.string().nullable(),
 });
 
 // JSON Schema mirror of extractedSchema, handed to Claude as a tool definition so
@@ -87,6 +90,11 @@ const EXTRACT_TOOL = {
         description:
           "Forma de pago printed on the ticket (EFECTIVO, TARJETA, TARJETA DE CRÉDITO/DÉBITO, etc.). When the payment type is obvious, map it to the SAT code: '01' efectivo, '04' tarjeta de crédito, '28' tarjeta de débito. Otherwise return the raw string as printed. null if not present.",
       },
+      venta: {
+        type: ["string", "null"],
+        description:
+          "The 'ID de venta' / operation id printed on the ticket, e.g. OXXO's 'ID=10CHI50CEC1' (return '10CHI50CEC1'). Alphanumeric, copy it verbatim. Distinct from folio. null if not present.",
+      },
     },
     required: [
       "rfcEmisor",
@@ -98,6 +106,7 @@ const EXTRACT_TOOL = {
       "sucursal",
       "puntoVenta",
       "paymentMethod",
+      "venta",
     ],
     additionalProperties: false,
   },
@@ -110,7 +119,8 @@ Rules:
 - Use null for any field not present in the text. Never invent or guess values for missing fields.
 - rfcEmisor is the merchant's RFC (12-13 alphanumeric chars, e.g. "XAXX010101000"). Only fill it if an RFC clearly appears; do not derive it from the merchant name.
 - total and subtotal are plain numbers (strip "$", "MXN", thousands separators).
-- date must be ISO 8601 (YYYY-MM-DD, optionally with time).
+- date must be ISO 8601 (YYYY-MM-DD, optionally with time). Mexican receipts print dates as DD/MM/YYYY — read them that way (e.g. "11/06/2026" is 11 June 2026 → "2026-06-11", NOT 6 November).
+- venta is the "ID de venta" / operation id (e.g. OXXO "ID=10CHI50CEC1" → "10CHI50CEC1"). It is alphanumeric and distinct from the numeric folio. Copy it verbatim; null if absent.
 - merchantNameGuess is a best-effort store name and is a hint only.
 - sucursal is the branch/store identifier of the purchase (branch name and/or store number, e.g. "ALSUPER PLUS BOSQUES", "Tienda #058"). This is what a portal's "Sucursal/Tienda" lookup field needs.
 - puntoVenta is the register/checkout/terminal number (e.g. "16" from "Punto de Venta: 16", "Caja 3"). Keep it as printed (digits only when numeric).
@@ -161,10 +171,52 @@ export async function parseTicket(rawText) {
   // silently writing garbage into the Ticket.
   const parsed = extractedSchema.parse(toolUse.input);
 
+  // Deterministic override: a few fields print in rigid, unambiguous formats that
+  // regex reads more reliably than the model — the "ID de venta", the folio de
+  // venta, and the DD/MM/YYYY date (the model has confused day/month here). When a
+  // pattern matches, it WINS over the model output; otherwise we keep the model's.
+  const merged = { ...parsed, ...deterministicHints(rawText) };
+
   log.info("Ticket parsed", {
-    hasRfc: Boolean(parsed.rfcEmisor),
-    hasTotal: parsed.total != null,
+    hasRfc: Boolean(merged.rfcEmisor),
+    hasTotal: merged.total != null,
+    hasVenta: Boolean(merged.venta),
   });
 
-  return parsed;
+  return merged;
+}
+
+/**
+ * Regex-extract the fields whose printed format is rigid enough to read
+ * deterministically (more reliable than the model for these). Only returns a key
+ * when its pattern matched, so the caller merges these OVER the model output
+ * without clobbering model values it didn't find.
+ *
+ * @param {string} rawText - OCR text.
+ * @returns {{ venta?: string, folio?: string, date?: string }}
+ */
+function deterministicHints(rawText) {
+  const hints = {};
+
+  // "ID de venta": e.g. "ID=10CHI50CEC1" (OXXO) → "10CHI50CEC1".
+  const venta = /\bID\s*[=:]\s*([A-Z0-9]{6,})/i.exec(rawText);
+  if (venta) hints.venta = venta[1].toUpperCase();
+
+  // Folio de venta: e.g. "Fol_Vta:8987293", "Folio de venta: 8987293".
+  const folio = /\bFol(?:io)?[_\s]*(?:de\s*)?Vta?\.?\s*[:#]?\s*([0-9]{4,})/i.exec(rawText);
+  if (folio) hints.folio = folio[1];
+
+  // Date in DD/MM/YYYY (MX format) → ISO YYYY-MM-DD. Guards real day/month ranges
+  // so a store number like "31/64/..." can't be misread as a date.
+  const date = /\b(\d{2})\/(\d{2})\/(\d{4})\b/.exec(rawText);
+  if (date) {
+    const [, dd, mm, yyyy] = date;
+    const d = +dd;
+    const m = +mm;
+    if (d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+      hints.date = `${yyyy}-${mm}-${dd}`;
+    }
+  }
+
+  return hints;
 }

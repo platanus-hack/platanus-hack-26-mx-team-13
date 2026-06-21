@@ -38,6 +38,9 @@ export const BILLING_DATA_KEYS = Object.freeze([
   "sucursal",
   "puntoVenta",
   "terminal",
+  // "ID de venta" / operation id printed on the ticket — some lookup gates (OXXO)
+  // require it to validate the purchase before the fiscal form unlocks.
+  "venta",
 ]);
 
 export default BILLING_DATA_KEYS;

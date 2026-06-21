@@ -32,7 +32,9 @@ import {
   reviewForm,
   distillRecipe,
   readyToSubmit,
+  deliverInvoice,
 } from "@/libs/engine/nodes";
+import { getPortalDriver } from "@/libs/engine/portals";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:process-invoice" });
@@ -376,6 +378,34 @@ export const processInvoiceTask = task({
       if (!isHumanResolvable(state.errorType)) return fail();
       if (!(await handoff())) return fail();
       handedOff = true;
+    }
+
+    // 2.5 Deterministic portal driver (OXXO et al.): when a merchant has a
+    //     hand-authored driver it owns the whole fill → validate → generate →
+    //     collect path. The generic reach_form/replay/fill can't operate its
+    //     readonly datepicker, two-stage validation gate, or selectOneMenu
+    //     overlays — so the driver replaces them. Terminal: success → DONE with the
+    //     CFDI collected (deliver_invoice sets it); a human-resolvable failure hands
+    //     off; anything else fails. Only fires when a driver exists for the RFC, so
+    //     every other merchant keeps the normal pipeline below.
+    if (!handedOff && getPortalDriver(state.rfcEmisor)) {
+      if (await stepWithRetry("deliver_invoice", deliverInvoice, FILL_MAX_ATTEMPTS)) {
+        log.info("process-invoice finished (portal driver)", {
+          ticketId,
+          status: state.status,
+          method: state.method,
+        });
+        return summarize(state);
+      }
+      if (!isHumanResolvable(state.errorType)) return fail();
+      if (!(await handoff())) return fail();
+      // The human took over the portal live. Auto-collecting the CFDI from a
+      // human-driven session is a follow-up; park ready for their manual finish.
+      await persist({
+        status: INVOICE_STATUS.READY_TO_SUBMIT,
+        liveViewUrl: await fetchLiveViewUrl(),
+      });
+      return summarize(state);
     }
 
     // 3. Reach the invoicing form. SKIP when a recipe will be replayed: the recipe's
