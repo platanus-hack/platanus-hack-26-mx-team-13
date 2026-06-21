@@ -129,6 +129,8 @@ export const INVOICE_METHOD_VALUES = Object.freeze(Object.values(INVOICE_METHOD)
  * @property {string} urlSource - How portalUrl was obtained (e.g. 'recipe' | 'directory' | 'ai' | 'ticket').
  * @property {string} browserbaseSessionId - Browserbase session id for this run.
  * @property {string} connectUrl - Live connect URL for human takeover / inspection.
+ * @property {string} liveViewUrl - Embeddable, interactive live-view page (http) the human drives during an awaiting_human handoff (Browserbase debuggerFullscreenUrl).
+ * @property {string} waitpointTokenId - Trigger.dev waitpoint token the run is suspended on while awaiting_human; the resume route completes it to continue.
  * @property {string} recipeId - Id of the recipe used to drive this run, if any.
  * @property {boolean} recipeUsed - Whether a recipe was replayed.
  * @property {number} recipeVersion - Version of the recipe used.

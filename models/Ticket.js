@@ -68,6 +68,12 @@ const invoiceSchema = new mongoose.Schema(
     browserbaseSessionId: { type: String, default: null },
     connectUrl: { type: String, default: null },
 
+    // Human-in-the-loop handoff (awaiting_human): the interactive live-view page
+    // the human drives, and the Trigger.dev waitpoint token the run is suspended
+    // on until the resume route completes it.
+    liveViewUrl: { type: String, default: null },
+    waitpointTokenId: { type: String, default: null },
+
     // Recipe
     recipeId: { type: String, default: null },
     recipeUsed: { type: Boolean, default: false },
