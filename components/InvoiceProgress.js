@@ -14,6 +14,13 @@ import {
 // How often to poll the ticket while a run is in flight.
 const POLL_INTERVAL_MS = 3000;
 
+// Give up polling after this long on a SINGLE status. The timer resets on every
+// status transition, so a healthy run (which keeps moving) never hits it; only a
+// run that's stuck — e.g. the Trigger worker died without writing a terminal
+// status, leaving the ticket pinned at "queued" — stops here instead of hammering
+// the API forever (each poll is a serverless invocation on Vercel).
+const MAX_POLL_MS = 6 * 60 * 1000;
+
 // The interactive live view is a human-drivable page (Browserbase
 // debuggerFullscreenUrl), persisted on Ticket.invoice.liveViewUrl during an
 // awaiting_human handoff. connectUrl is a CDP endpoint (wss), not browsable, so
@@ -43,6 +50,11 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
   const [resuming, setResuming] = useState(false);
   const [liveDisconnected, setLiveDisconnected] = useState(false);
   const [error, setError] = useState(null);
+  // Set when polling gives up (MAX_POLL_MS on one status) so the UI can offer a
+  // manual refresh instead of silently freezing. Bumping `pollNonce` re-arms the
+  // polling effect (the status itself hasn't changed, so it wouldn't re-run).
+  const [pollStalled, setPollStalled] = useState(false);
+  const [pollNonce, setPollNonce] = useState(0);
 
   // Re-seed when the row changes to a different ticket (lists reuse this
   // component across rows). Within one ticket, polling owns `invoice` state.
@@ -86,15 +98,53 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
     }
   }, [ticket.id, onChange]);
 
-  // Poll while the run is moving. Re-runs when the status changes; an immediate
-  // refresh on (re)mount makes a freshly-opened modal catch up at once.
+  // Poll while the run is moving. Re-runs when the status changes (so the
+  // MAX_POLL_MS budget resets on every transition); an immediate refresh on
+  // (re)mount makes a freshly-opened modal catch up at once. Polling pauses while
+  // the tab is hidden and gives up after MAX_POLL_MS on a stuck status — both
+  // keep a background or crashed run from spamming the API on Vercel.
   useEffect(() => {
     const status = invoice?.status;
     if (!status || !isPollableInvoiceStatus(status)) return undefined;
-    refresh();
-    const timer = setInterval(refresh, POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [invoice?.status, refresh]);
+
+    setPollStalled(false);
+    const startedAt = Date.now();
+    let timer = null;
+
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const tick = () => {
+      if (Date.now() - startedAt > MAX_POLL_MS) {
+        stop();
+        setPollStalled(true);
+        return;
+      }
+      refresh();
+    };
+    const start = () => {
+      if (timer || document.hidden) return;
+      refresh();
+      timer = setInterval(tick, POLL_INTERVAL_MS);
+    };
+    const onVisibility = () => (document.hidden ? stop() : start());
+
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [invoice?.status, refresh, pollNonce]);
+
+  // Re-arm polling after it stalled (manual "Actualizar").
+  const retryPolling = useCallback((event) => {
+    event?.stopPropagation?.();
+    setPollNonce((n) => n + 1);
+  }, []);
 
   const generate = useCallback(
     async (event) => {
@@ -225,6 +275,15 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
     return (
       <div className="flex items-center justify-end gap-2">
         {chipFor(invoice.status)}
+        {pollStalled ? (
+          <button
+            type="button"
+            onClick={retryPolling}
+            className="rounded-full border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            Actualizar
+          </button>
+        ) : null}
         {invoice.status === INVOICE_STATUS.AWAITING_HUMAN
           ? liveViewButton("Resolver", "attention")
           : null}
@@ -243,7 +302,18 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
         <h3 className="text-sm font-semibold text-black dark:text-zinc-50">
           Factura
         </h3>
-        {invoice ? chipFor(invoice.status) : null}
+        <div className="flex items-center gap-2">
+          {pollStalled ? (
+            <button
+              type="button"
+              onClick={retryPolling}
+              className="rounded-full border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Actualizar
+            </button>
+          ) : null}
+          {invoice ? chipFor(invoice.status) : null}
+        </div>
       </div>
 
       {!invoice ? (

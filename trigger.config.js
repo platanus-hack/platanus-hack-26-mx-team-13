@@ -11,6 +11,9 @@ export default defineConfig({
   runtime: "node-22",
   // Tasks live in ./trigger (e.g. trigger/processInvoice.js).
   dirs: ["./trigger"],
+  // Max wall-clock seconds a task run may take before the engine kills it.
+  // Required by trigger.dev v4 (must be >= 5). Override per-task as needed.
+  maxDuration: 300,
   // Default retry policy for tasks that don't set their own. The engine shell
   // also keeps its own per-node retry counters (see trigger/processInvoice.js).
   retries: {
