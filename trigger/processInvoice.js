@@ -408,28 +408,33 @@ export const processInvoiceTask = task({
     // 6. Form is ready; park for the (human-confirmed) submit step. This is the
     //    terminal step that sets the final success status, so a failure here must
     //    fail the run like every other step (don't report a half-done run as ok).
+    //
+    //    The client STOPS polling the moment it sees READY_TO_SUBMIT (it's not in
+    //    POLLABLE — see components/invoiceFormat.js), so that status must NEVER be
+    //    persisted without the interactive liveViewUrl the "Revisar y enviar" button
+    //    needs — otherwise the client reads the URL-less intermediate state, stops
+    //    polling, and strands the button disabled until a manual refresh. So fetch
+    //    the live view FIRST and put it on state, making ready_to_submit's persist
+    //    write status + liveViewUrl atomically. (connectUrl is a CDP endpoint, not
+    //    browsable, so the UI needs this http(s) liveViewUrl. Best-effort: an expired
+    //    session just leaves it null — the same as before, but never mid-transition.)
+    state.liveViewUrl = await fetchLiveViewUrl();
     if (!(await step("ready_to_submit", readyToSubmit))) return fail();
 
     // ready_to_submit parks at awaiting_human when it can't verify a submit control
     // on an automated fill (it never fabricates one). Route that through one
     // durable handoff; when the human confirms in the live session, the form is
     // ready to submit. (A human-driven fill is already trusted ready, so this only
-    // fires on an ai/recipe fill that found no submit control.)
+    // fires on an ai/recipe fill that found no submit control.) The handoff clears
+    // liveViewUrl on resume, so re-establish a fresh interactive live view and the
+    // READY_TO_SUBMIT status in a SINGLE atomic persist (same no-race contract).
     if (state.status === INVOICE_STATUS.AWAITING_HUMAN) {
       if (!(await handoff())) return fail();
+      await persist({
+        status: INVOICE_STATUS.READY_TO_SUBMIT,
+        liveViewUrl: await fetchLiveViewUrl(),
+      });
     }
-
-    // Land in READY_TO_SUBMIT with a fresh interactive live view so the user can
-    // review the filled form and confirm submit in the SAME keepAlive session.
-    // Every path here would otherwise strand them with no browsable URL: the
-    // automated AI/recipe success never set a live view, and a human handoff
-    // cleared it on resume. (connectUrl is a CDP endpoint, not browsable, so the
-    // UI's "Revisar y enviar" needs this http(s) liveViewUrl.) Best-effort: a
-    // session that has since expired just leaves liveViewUrl null.
-    await persist({
-      status: INVOICE_STATUS.READY_TO_SUBMIT,
-      liveViewUrl: await fetchLiveViewUrl(),
-    });
 
     log.info("process-invoice finished", {
       ticketId,
