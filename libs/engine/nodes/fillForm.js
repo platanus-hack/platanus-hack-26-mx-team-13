@@ -11,8 +11,10 @@
 // Flow per step (CFDI portals are often multi-step: ticket data → fiscal data):
 //   1. extract() a fill plan: which visible fields map to which billing dataKey,
 //      whether this is the fiscal-data step, and the next / submit buttons.
-//   2. For each mapped field with a value: observe() → act() → verify by readback.
-//      Verified fills are recorded as { action:'fill', selector, dataKey, fieldType }.
+//   2. For each mapped field with a value: observe() to locate it, then write our
+//      value deterministically (never let the agent infer it — portals show
+//      filled-in EXAMPLES it would copy) and verify by readback. Verified fills
+//      are recorded as { action:'fill', selector, dataKey, fieldType }.
 //   3. Detect the final submit button and STORE its selector — never click it
 //      (a human confirms the submit downstream).
 //   4. If this is not yet the fiscal step, click "next" (recorded as a click action)
@@ -145,45 +147,59 @@ async function readbackValue(stagehand, selector) {
 }
 
 /**
- * Fill one field: observe to get an action handle (which carries the selector we
- * record), act on it, then verify by reading the value back. Falls back to a
- * deterministic locator.fill() if the acted value didn't take. Returns the
- * outcome (selector + whether it verified) or null when no handle was found.
+ * Fill one field with OUR billing value. observe() is used ONLY to locate the
+ * field (its selector); the value is then written deterministically with
+ * Playwright. We never hand the value to the agent to type: portals often show a
+ * filled-in EXAMPLE (a sample receipt with its own folio/fecha/total), and an
+ * agent told to "fill this field" will happily copy that visible example instead
+ * of the user's real data. Writing the value ourselves makes the example a
+ * harmless guide, not a source of wrong input. The agent stays as a fallback for
+ * inputs Playwright's fill() can't drive (custom widgets, masked/date pickers).
+ * Returns the outcome (selector + whether it verified) or null if not found.
  */
 async function fillField(stagehand, label, valueStr, fieldType) {
   const handles = await stagehand.observe(
-    `Fill the "${label}" field with the value ${JSON.stringify(valueStr)}.`
+    `Find the "${label}" input field on the form. Do not type anything into it.`
   );
   const handle = Array.isArray(handles) ? handles[0] : null;
   if (!handle || !handle.selector) return null;
 
   const { selector } = handle;
-  await stagehand.act(handle);
+  const isSelect = String(fieldType).toLowerCase() === "select";
 
-  let verified = valueWasWritten(await readbackValue(stagehand, selector), valueStr);
-  if (!verified) {
-    // The agent's action didn't land the exact value; write it deterministically
-    // against the selector we already have, then re-verify. A <select> rejects
-    // locator.fill() (Playwright throws "not an <input>") — choose the option instead,
-    // trying the visible label first, then the option value.
+  // Primary path: write the value deterministically. Playwright's fill() clears
+  // the field first, so any pre-filled example is replaced, not appended. A
+  // <select> rejects fill() ("not an <input>") — choose the option instead,
+  // trying the visible label first, then the option value.
+  try {
+    const locator = getActivePage(stagehand).locator(selector);
+    if (isSelect) {
+      await locator
+        .selectOption({ label: valueStr })
+        .catch(() => locator.selectOption(valueStr));
+    } else {
+      await locator.fill(valueStr);
+    }
+  } catch {
+    // Deterministic write failed (custom widget, masked/date input) — fall back
+    // to the agent, re-observing with our value in the instruction so it has
+    // something to type. Only reached for inputs fill() can't drive, so the
+    // example-copying risk is marginal here.
     try {
-      const locator = getActivePage(stagehand).locator(selector);
-      if (String(fieldType).toLowerCase() === "select") {
-        await locator
-          .selectOption({ label: valueStr })
-          .catch(() => locator.selectOption(valueStr));
-      } else {
-        await locator.fill(valueStr);
-      }
-      verified = valueWasWritten(
-        await readbackValue(stagehand, selector),
-        valueStr
+      const valueHandles = await stagehand.observe(
+        `Fill the "${label}" field with the value ${JSON.stringify(valueStr)}.`
       );
+      const vh = Array.isArray(valueHandles) ? valueHandles[0] : null;
+      if (vh) await stagehand.act(vh);
     } catch {
-      // keep verified = false
+      // keep going to the readback verdict below
     }
   }
 
+  const verified = valueWasWritten(
+    await readbackValue(stagehand, selector),
+    valueStr
+  );
   return { selector, verified };
 }
 
