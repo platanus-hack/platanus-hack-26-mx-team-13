@@ -5,9 +5,9 @@
 // InvoiceState from the ticket, runs the engine nodes in order, and persists
 // ticket.invoice after every node so the dashboard can poll progress.
 //
-// The nodes are STUBS for now (see libs/engine/nodes/*); the real Browserbase /
-// Stagehand work lands in later issues. The shell — ordering, retry counters,
-// the recipe-vs-AI branch, per-node persistence, and failure handling — is real.
+// The nodes (libs/engine/nodes/*) drive the real Browserbase / Stagehand work; this
+// shell owns the spine — ordering, retry counters, the recipe-vs-AI branch, per-node
+// persistence, the HITL handoff, and failure handling.
 
 import { task, wait } from "@trigger.dev/sdk";
 import connectMongoose from "@/libs/core/mongoose";
@@ -94,6 +94,13 @@ export const processInvoiceTask = task({
   id: "process-invoice",
   // The full run is a long browser job; give it generous headroom.
   maxDuration: 600,
+  // Pin to a single attempt: the shell owns its OWN per-node retry budgets
+  // (NAV_MAX_ATTEMPTS / FILL_MAX_ATTEMPTS) and durable HITL parking. Without this the
+  // task inherits trigger.config.js' default maxAttempts:3, so any throw escaping
+  // run() (a Mongo blip, a mid-run redeploy) would re-run the WHOLE pipeline — opening
+  // a second keepAlive Browserbase session (billing leak) and possibly re-driving the
+  // form — bypassing the POST-route start-gate idempotency.
+  retries: { maxAttempts: 1 },
   run: async ({ ticketId }) => {
     await connectMongoose();
 

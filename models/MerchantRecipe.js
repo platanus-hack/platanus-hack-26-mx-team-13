@@ -93,6 +93,12 @@ const merchantRecipeSchema = new mongoose.Schema(
     // The ordered playbook.
     steps: { type: [stepSchema], default: [] },
 
+    // Selector of the final submit / "Generar factura" control. Distilled from the
+    // fill that produced the recipe and LOCATED-but-NEVER-CLICKED on replay, so a
+    // recipe run reaches ready_to_submit without a human (the person confirms the
+    // actual submit downstream). null when the source fill never found a submit.
+    submitButtonSelector: { type: selectorSchema, default: null },
+
     // How the recipe was produced.
     recordedVia: { type: String, enum: ["ai", "human"], default: "ai" },
 

@@ -1,9 +1,8 @@
 // Engine nodes barrel — one import site for the invoicing pipeline.
 //
 // Each node is an async (state) => Partial<InvoiceState> following the contract in
-// libs/engine/node.js. These are STUBS for now (placeholder returns); the real
-// implementations land in later issues. The task shell (trigger/processInvoice.js)
-// runs them in order via runNode().
+// libs/engine/node.js. The task shell (trigger/processInvoice.js) runs them in order
+// via runNode().
 
 export { resolvePortal } from "./resolvePortal.js";
 export { initNavigate } from "./initNavigate.js";

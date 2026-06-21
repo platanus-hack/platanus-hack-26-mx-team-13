@@ -321,6 +321,10 @@ export async function distillRecipe(state) {
       merchantName: state.merchantName || null,
       normalizedName: normalizeName(state.merchantName),
       recordedVia,
+      // Carry the submit control fill_form located (a raw observe selector string)
+      // into the recipe as a multi-strategy selector, so replay can hand it to
+      // ready_to_submit without re-deriving it with AI. null when none was found.
+      submitButtonSelector: toRecipeSelector(state.submitButtonSelector),
     });
 
     log.info("distill_recipe: recipe distilled", {

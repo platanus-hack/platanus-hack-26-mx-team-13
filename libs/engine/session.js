@@ -28,6 +28,14 @@ const log = createLogger({ component: "engine:session" });
 // created it, so a later node — or a human via HITL — can reconnect.
 const SESSION_TIMEOUT_SECONDS = 3600;
 
+// LLM that powers Stagehand's instance-level act()/observe()/extract() (the AI
+// fill path). Stagehand v3 otherwise defaults to "openai/gpt-4.1-mini", which both
+// needs an OPENAI_API_KEY and silently bypasses Claude — pin it to Anthropic (the
+// "anthropic/" prefix auto-loads ANTHROPIC_API_KEY from the env, same as the
+// reach_form agent). Override with ENGINE_LLM_MODEL (e.g. anthropic/claude-sonnet-4-6
+// for higher-fidelity extraction).
+const ENGINE_MODEL = process.env.ENGINE_LLM_MODEL || "anthropic/claude-haiku-4-5";
+
 /** Whether to drive a local headed browser instead of Browserbase (dev only). */
 function isLocal() {
   return process.env.ENGINE_LOCAL_BROWSER === "true";
@@ -112,10 +120,12 @@ export async function createSession({ ticketId } = {}) {
   const stagehand = local
     ? new Stagehand({
         env: "LOCAL",
+        model: ENGINE_MODEL,
         localBrowserLaunchOptions: { headless: false },
       })
     : new Stagehand({
         env: "BROWSERBASE",
+        model: ENGINE_MODEL,
         apiKey: requireEnv("BROWSERBASE_API_KEY"),
         projectId: requireEnv("BROWSERBASE_PROJECT_ID"),
         browserbaseSessionCreateParams: {
@@ -155,6 +165,7 @@ export async function reconnectSession(sessionIdOrConnectUrl) {
 
   const stagehand = new Stagehand({
     env: "BROWSERBASE",
+    model: ENGINE_MODEL,
     apiKey: requireEnv("BROWSERBASE_API_KEY"),
     projectId: requireEnv("BROWSERBASE_PROJECT_ID"),
     browserbaseSessionID: sessionId,

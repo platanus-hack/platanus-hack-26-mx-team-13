@@ -385,6 +385,12 @@ export async function replayRecipe(state) {
       unfilled: result.unfilledFields.length,
     });
 
+    // Surface the recipe's submit control (located, never clicked) so ready_to_submit
+    // can park the run at READY_TO_SUBMIT instead of bouncing every recipe replay into
+    // a human handoff. null on older recipes that predate the field → graceful
+    // degradation back to the awaiting_human path.
+    const submitButtonSelector = describeSelector(recipe.submitButtonSelector);
+
     return {
       status: INVOICE_STATUS.REPLAYING,
       method: INVOICE_METHOD.RECIPE,
@@ -394,7 +400,10 @@ export async function replayRecipe(state) {
       recipeVersion,
       filledFields: result.filledFields,
       unfilledFields: result.unfilledFields,
-      detail: `replayed recipe v${recipeVersion}: filled ${result.filledFields.length} field(s)`,
+      submitButtonSelector,
+      detail: `replayed recipe v${recipeVersion}: filled ${result.filledFields.length} field(s); submit ${
+        submitButtonSelector ? "located (not clicked)" : "not in recipe"
+      }`,
     };
   } finally {
     // Drop our local CDP/SDK handle on every path (success or RECIPE_REPLAY_FAILED).

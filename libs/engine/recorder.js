@@ -116,7 +116,23 @@ function recorderProgram(config) {
 
   // Stable per-element key so repeated input events on the same field update one
   // entry (latest value wins) instead of appending a step per keystroke.
+  //
+  // CRITICAL: recorderProgram re-runs FRESH on every new document (addInitScript),
+  // but `buffer` is rehydrated across navigations from sessionStorage. A counter that
+  // restarted at 0 would re-mint "e1","e2",... on page 2 and collide with page 1's
+  // keys still in the buffer — recordValue's coalesce loop would then OVERWRITE the
+  // earlier page's fill instead of appending a new one (lost actions on multi-page
+  // CFDI/SAT forms). Seed the counter ABOVE every ordinal already in the buffer so
+  // keys stay unique across navigations while still coalescing within a document.
   var counter = 0;
+  for (var _i = 0; _i < buffer.length; _i++) {
+    var _k = buffer[_i] && buffer[_i]._key;
+    var _m = _k ? /^e(\d+)/.exec(_k) : null;
+    if (_m) {
+      var _ord = parseInt(_m[1], 10);
+      if (_ord > counter) counter = _ord;
+    }
+  }
   function keyFor(el) {
     var k = el.getAttribute(ATTR);
     if (!k) {
