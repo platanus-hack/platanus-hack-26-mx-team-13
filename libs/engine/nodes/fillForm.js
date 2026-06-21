@@ -32,7 +32,7 @@ import {
   getBillingValue,
   BILLING_DATA_KEYS,
 } from "@/libs/engine/billingData";
-import { reconnectSession } from "@/libs/engine/session";
+import { reconnectSession, getActivePage } from "@/libs/engine/session";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:fill-form" });
@@ -134,7 +134,7 @@ function valueWasWritten(readback, expected) {
 /** Read a field's current value back, trying input value then text content. */
 async function readbackValue(stagehand, selector) {
   try {
-    const locator = stagehand.page.locator(selector);
+    const locator = getActivePage(stagehand).locator(selector);
     const inputValue = await locator.inputValue();
     if (inputValue != null && inputValue !== "") return inputValue;
     const text = await locator.textContent();
@@ -165,7 +165,7 @@ async function fillField(stagehand, label, valueStr) {
     // The agent's action didn't land the exact value; write it deterministically
     // against the selector we already have, then re-verify.
     try {
-      await stagehand.page.locator(selector).fill(valueStr);
+      await getActivePage(stagehand).locator(selector).fill(valueStr);
       verified = valueWasWritten(
         await readbackValue(stagehand, selector),
         valueStr

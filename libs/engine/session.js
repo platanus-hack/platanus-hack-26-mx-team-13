@@ -158,6 +158,12 @@ export async function reconnectSession(sessionIdOrConnectUrl) {
     apiKey: requireEnv("BROWSERBASE_API_KEY"),
     projectId: requireEnv("BROWSERBASE_PROJECT_ID"),
     browserbaseSessionID: sessionId,
+    // keepAlive so stagehand.close() only drops the LOCAL CDP handle. Without it
+    // Stagehand defaults keepAlive=false and close() calls apiClient.end(), which
+    // TERMINATES the shared Browserbase session — stranding the next node (AI
+    // fallback / later node / HITL) that must reconnect to the SAME session.
+    // Mirrors createSession, which keeps the session alive the same way.
+    keepAlive: true,
   });
 
   await stagehand.init();
@@ -167,6 +173,29 @@ export async function reconnectSession(sessionIdOrConnectUrl) {
   log.info("Session reconnected", { sessionId });
 
   return { stagehand, sessionId, connectUrl };
+}
+
+/**
+ * Resolve the live page to drive from a running Stagehand session.
+ *
+ * Stagehand v3 has NO `stagehand.page` accessor — pages live on the CDP-backed
+ * context (stagehand.context). Return the most-recent active page, falling back
+ * to the first open page; throw a clear error when the session exposes no page so
+ * a node fails loudly instead of dereferencing `undefined` mid-navigation.
+ *
+ * @param {import("@browserbasehq/stagehand").Stagehand} stagehand - A live session.
+ * @returns {import("playwright").Page} The active Stagehand page.
+ */
+export function getActivePage(stagehand) {
+  const context = stagehand?.context;
+  const page =
+    (typeof context?.activePage === "function" && context.activePage()) ||
+    (typeof context?.pages === "function" && context.pages()[0]) ||
+    null;
+  if (!page) {
+    throw new Error("Stagehand session has no active page to drive");
+  }
+  return page;
 }
 
 /**
@@ -204,7 +233,7 @@ export async function closeSession(sessionId) {
  * Screenshot descriptor (see libs/engine/state.js) to append to
  * InvoiceState.screenshots.
  *
- * @param {import("playwright").Page} page - The Stagehand page (stagehand.page).
+ * @param {import("playwright").Page} page - The Stagehand page (getActivePage()).
  * @param {string} ticketId - Ticket the run belongs to (R2 key prefix).
  * @param {string} [label] - What the shot shows (e.g. 'form', 'error').
  * @returns {Promise<{ key: string, label: string|null, at: string }>}

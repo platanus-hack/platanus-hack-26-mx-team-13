@@ -32,7 +32,7 @@
 import { INVOICE_STATUS } from "@/libs/engine/state";
 import { ENGINE_ERRORS } from "@/libs/engine/errorTypes";
 import { engineError } from "@/libs/engine/node";
-import { reconnectSession } from "@/libs/engine/session";
+import { reconnectSession, getActivePage } from "@/libs/engine/session";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:reach-form" });
@@ -308,7 +308,11 @@ function collectPages(stagehand) {
   } catch {
     pages = [];
   }
-  if (!pages.length && stagehand.page) pages = [stagehand.page];
+  // Stagehand v3 has no stagehand.page; fall back to the context's active page.
+  if (!pages.length) {
+    const active = stagehand.context?.activePage?.();
+    if (active) pages = [active];
+  }
   return pages.filter(Boolean);
 }
 
@@ -453,7 +457,8 @@ export async function reachForm(state) {
   const recordedActions = [...(state.recordedActions || [])];
 
   try {
-    const page = stagehand.page;
+    // Stagehand v3 has no stagehand.page — resolve the live page off the context.
+    const page = getActivePage(stagehand);
     const landingSignals = await analyzePage(page);
 
     // Phase 1 — DOM blocker check (free). A blocked landing page fails fast with a
@@ -490,11 +495,19 @@ export async function reachForm(state) {
     const hit = await findFormPage(pages);
 
     if (hit) {
-      // Surface the form's tab so the downstream fill node lands on it.
+      // Surface the form's tab so the fill node lands on it. The fill node drives
+      // Stagehand's ACTIVE page (its AI methods take no explicit page), so mark the
+      // form tab active — not just bringToFront() — or a multi-tab navigation would
+      // leave the original landing tab active and the fill would run on the wrong page.
       try {
         await hit.page.bringToFront();
       } catch {
         // Non-fatal — the fill node reconnects and re-finds the page if needed.
+      }
+      try {
+        stagehand.context?.setActivePage?.(hit.page);
+      } catch {
+        // Non-fatal — activePage() falls back to the most-recent page.
       }
 
       const formUrl = safeUrl(hit.page);
