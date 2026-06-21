@@ -140,31 +140,27 @@ function extractQrFields(params) {
 }
 
 // Persist a decoded QR onto the ticket (mutates the doc; caller saves it):
-//   - invoice.portalUrl + invoice.urlSource:"qr" — the authoritative portal so
-//     the engine can skip discovery. Preserves any existing invoice fields.
+//   - extracted.portalUrl + extracted.urlSource:"qr" — the authoritative portal so
+//     the engine can skip discovery. Stored on `extracted`, NOT `invoice`.
 //   - best-effort backfill of folio/total onto extracted ONLY when the QR carries
 //     them and the parse didn't (never overwrites a value OCR already extracted).
 // No-op when qr is null.
 function applyQrToTicket(ticket, qr) {
   if (!qr?.portalUrl) return;
 
-  // Set the portal on invoice without clobbering other invoice fields. invoice
-  // is null until a run starts, so seed an object when missing. toObject() on a
-  // subdoc gives a plain object we can spread.
-  const existingInvoice =
-    ticket.invoice && typeof ticket.invoice.toObject === "function"
-      ? ticket.invoice.toObject()
-      : ticket.invoice || {};
-  ticket.invoice = {
-    ...existingInvoice,
-    portalUrl: qr.portalUrl,
-    urlSource: "qr",
-  };
+  // CRITICAL (#104): write the portal to `extracted`, never `invoice`. Seeding
+  // ticket.invoice here would make Mongoose cast the subdoc and apply its default
+  // status "queued"; the POST /invoice start-gate ($or:[{invoice:null},
+  // {invoice.status:FAILED}]) would then never match and the run could never start —
+  // bricking exactly the QR tickets this feature targets. resolve_portal reads the
+  // portal from extracted (urlSource === "qr").
+  if (!ticket.extracted) ticket.extracted = {};
+  ticket.extracted.portalUrl = qr.portalUrl;
+  ticket.extracted.urlSource = "qr";
 
   // Best-effort backfill of folio/total from the QR query params — only fill a
   // gap, never overwrite what the parse already produced.
   const { folio, total } = extractQrFields(qr.params);
-  if (!ticket.extracted) ticket.extracted = {};
   if (folio != null && ticket.extracted.folio == null) {
     ticket.extracted.folio = folio;
   }

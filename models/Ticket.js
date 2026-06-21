@@ -19,6 +19,15 @@ const extractedSchema = new mongoose.Schema(
     // Ticket-lookup fields most MX portals require before showing the fiscal form.
     sucursal: { type: String, default: null },
     puntoVenta: { type: String, default: null },
+    // Forma/método de pago read off the ticket (e.g. EFECTIVO/TARJETA → SAT code).
+    // Without this path the strict subdoc strips the OCR value on save (#102).
+    paymentMethod: { type: String, default: null },
+    // Facturación portal decoded from the ticket's QR (#98). Stored on `extracted`
+    // (NOT `invoice`) so it never instantiates an invoice subdoc with the default
+    // status "queued", which would block the run start-gate. resolve_portal prefers
+    // this URL when urlSource === "qr".
+    portalUrl: { type: String, default: null },
+    urlSource: { type: String, default: null },
   },
   { _id: false }
 );

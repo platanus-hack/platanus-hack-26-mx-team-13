@@ -84,15 +84,15 @@ export async function resolvePortal(state) {
 
   // 0. QR shortcut — many MX tickets print a QR whose payload IS the facturación
   //    portal URL. When OCR ingestion decoded one it persisted it on the ticket
-  //    (invoice.portalUrl + invoice.urlSource:"qr"); that URL is authoritative —
+  //    (extracted.portalUrl + extracted.urlSource:"qr"); that URL is authoritative —
   //    the merchant printed it themselves — so prefer it and SKIP the
   //    KnownMerchant/Firecrawl discovery entirely.
   //
   //    The QR url can reach this node two ways: directly on `state` (if the run
   //    shell ever seeds it) or, the actual path today, on the persisted
-  //    Ticket.invoice (the OCR route wrote it but buildInvoiceState seeds only the
-  //    OCR `extracted` fields). Read state first, then fall back to the ticket so
-  //    this stays robust to the state shape resolve_portal actually receives.
+  //    Ticket.extracted (the OCR route writes it there — NOT on invoice, which would
+  //    seed a "queued" status and block the run start-gate, #104). Read state first,
+  //    then fall back to the ticket so this stays robust to the state shape received.
   const qrPortalUrl = await resolveQrPortalUrl(state);
   if (qrPortalUrl) {
     // Stable registry key (same scheme as discovery): RFC when present, else the
@@ -446,10 +446,10 @@ function normalizeName(name) {
 /**
  * Find a QR-sourced facturación portal URL for this run, if OCR ingestion decoded
  * one. Checks the state first (forward-compatible, if the run shell ever seeds it)
- * then falls back to the persisted Ticket.invoice — the actual path today, since
- * the OCR route writes invoice.portalUrl/urlSource but buildInvoiceState seeds only
- * the OCR `extracted` fields onto state. Only a urlSource of "qr" counts (a cache /
- * research url is resolve_portal's own output, not an authoritative ticket QR).
+ * then falls back to the persisted Ticket.extracted — where the OCR route writes the
+ * QR portal (extracted.portalUrl/urlSource:"qr"; it must NOT live on invoice, which
+ * would seed a "queued" status and block the run start-gate — see #104). Only a
+ * urlSource of "qr" counts (a cache / research url is resolve_portal's own output).
  *
  * Best-effort: a Ticket read failure (or no ticketId) returns null so the resolver
  * falls through to normal cache/discovery rather than crashing.
@@ -458,7 +458,7 @@ function normalizeName(name) {
  * @returns {Promise<string|null>}
  */
 async function resolveQrPortalUrl(state) {
-  // 1. Already on state (e.g. a future run shell that seeds invoice fields).
+  // 1. Already on state (e.g. a future run shell that seeds the QR fields).
   if (state?.urlSource === "qr" && isHttpUrl(state.portalUrl)) {
     return state.portalUrl.trim();
   }
@@ -466,10 +466,10 @@ async function resolveQrPortalUrl(state) {
   // 2. Fall back to the persisted ticket — where the OCR route actually wrote it.
   if (!state?.ticketId) return null;
   try {
-    const ticket = await Ticket.findById(state.ticketId).select("invoice").lean();
-    const invoice = ticket?.invoice;
-    if (invoice?.urlSource === "qr" && isHttpUrl(invoice.portalUrl)) {
-      return invoice.portalUrl.trim();
+    const ticket = await Ticket.findById(state.ticketId).select("extracted").lean();
+    const extracted = ticket?.extracted;
+    if (extracted?.urlSource === "qr" && isHttpUrl(extracted.portalUrl)) {
+      return extracted.portalUrl.trim();
     }
   } catch (err) {
     log.warn("Could not read ticket for QR portal lookup", {
