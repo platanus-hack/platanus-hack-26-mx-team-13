@@ -147,14 +147,43 @@ export const processInvoiceTask = task({
     // 3. Reach the invoicing form.
     if (!(await step("reach_form", reachForm))) return fail();
 
-    // 4. Fill the form: replay a stored recipe when we have one, else AI-fill
-    //    (retry the fill on failure).
-    const hasRecipe = Boolean(state.recipeId);
-    const fillName = hasRecipe ? "replay_recipe" : "fill_form";
-    const fillNode = hasRecipe ? replayRecipe : fillForm;
-    if (!(await stepWithRetry(fillName, fillNode, FILL_MAX_ATTEMPTS))) {
-      return fail();
+    // 4. Fill the form. When the run carries a recipe, replay it deterministically
+    //    first (cheap, zero-AI); otherwise AI-fill from scratch. A replay that
+    //    fails (RECIPE_REPLAY_FAILED) or finds no usable recipe (recipeFound:false)
+    //    wrote nothing into the form, so it must fall back to an AI fill — it can
+    //    never short-circuit the run to submit on an empty form.
+    let filled;
+    if (state.recipeId) {
+      filled = await stepWithRetry("replay_recipe", replayRecipe, FILL_MAX_ATTEMPTS);
+
+      // replay_recipe reports recipeFound:false (no active recipe) WITHOUT throwing,
+      // so runNode marks the step ok even though nothing was filled — recipeUsed
+      // stays false. Treat that, like an outright replay error, as a miss to fall
+      // back on rather than a successful fill.
+      if (!filled || state.recipeUsed !== true) {
+        log.warn("replay_recipe did not fill the form — falling back to AI fill", {
+          ticketId,
+          recipeFound: state.recipeFound,
+          errorType: state.errorType,
+        });
+        // Drop the recipe context so the AI fill starts clean and the run's method
+        // resolves to AI (so distill_recipe still runs on the fresh fill below) and
+        // any replay error doesn't linger on the persisted state.
+        await persist({
+          recipeId: null,
+          recipeUsed: false,
+          recipeVersion: null,
+          method: null,
+          error: null,
+          errorType: null,
+        });
+        filled = await stepWithRetry("fill_form", fillForm, FILL_MAX_ATTEMPTS);
+      }
+    } else {
+      filled = await stepWithRetry("fill_form", fillForm, FILL_MAX_ATTEMPTS);
     }
+
+    if (!filled) return fail();
 
     // 5. Distill a reusable recipe from a fresh ai/human fill. Best-effort: a
     //    distillation failure does not fail the run (we already filled the form).
