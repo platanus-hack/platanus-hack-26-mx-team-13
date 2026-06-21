@@ -5,7 +5,7 @@ import Link from "next/link";
 import TicketUpload from "@/components/TicketUpload";
 import TicketDetail from "@/components/TicketDetail";
 import InvoiceProgress from "@/components/InvoiceProgress";
-import { STATUS, formatTotal, formatDate } from "@/components/ticketFormat";
+import { ticketChip, formatTotal, formatDate } from "@/components/ticketFormat";
 
 // The dashboard is an action surface, not the full list — show only a preview.
 const PREVIEW_LIMIT = 5;
@@ -64,7 +64,7 @@ export default function TicketsSection({ compact = false }) {
           </p>
         ) : (
           tickets.map((t) => {
-            const status = STATUS[t.status] || STATUS.uploaded;
+            const chip = ticketChip(t);
             const e = t.extracted || {};
             return (
               <button
@@ -100,14 +100,10 @@ export default function TicketsSection({ compact = false }) {
                   {formatTotal(e.total)}
                 </span>
                 <span
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold rounded-full py-[5px] px-[11px] whitespace-nowrap"
-                  style={{
-                    background: status.bgVar || "var(--info-soft)",
-                    color: status.colorVar || "var(--info-text)",
-                  }}
+                  className={`inline-flex items-center gap-1.5 rounded-full py-[5px] px-[11px] text-xs font-semibold whitespace-nowrap ${chip.className}`}
                 >
                   <span className="w-[7px] h-[7px] rounded-full bg-current" />
-                  {status.label}
+                  {chip.label}
                 </span>
               </button>
             );

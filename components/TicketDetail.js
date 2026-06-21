@@ -2,11 +2,12 @@
 
 import { useEffect } from "react";
 import {
-  STATUS,
+  ticketChip,
   formatTotal,
   formatDate,
   formatDateTime,
 } from "@/components/ticketFormat";
+import { isAnimatedTone } from "@/components/invoiceFormat";
 import InvoiceProgress from "@/components/InvoiceProgress";
 
 // The extracted fields, in display order, with how each value should render.
@@ -51,7 +52,7 @@ export default function TicketDetail({ ticket, onClose, onChange }) {
 
   if (!ticket) return null;
 
-  const status = STATUS[ticket.status] || STATUS.uploaded;
+  const chip = ticketChip(ticket);
   const e = ticket.extracted || {};
   const title = e.merchantNameGuess || e.rfcEmisor || "Receipt";
 
@@ -79,9 +80,12 @@ export default function TicketDetail({ ticket, onClose, onChange }) {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <span
-              className={`rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${chip.className}`}
             >
-              {status.label}
+              {isAnimatedTone(chip.tone) ? (
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+              ) : null}
+              {chip.label}
             </span>
             <button
               type="button"

@@ -2,6 +2,8 @@
 // Used by both TicketsSection (dashboard) and TicketsTable (/tickets) so the
 // chip styling and number/date formatting stay in one place.
 
+import { invoiceChip } from "@/components/invoiceFormat";
+
 // Visual status chips. The Ticket model uses: uploaded | ocr_done | failed.
 export const STATUS = {
   uploaded: {
@@ -30,6 +32,23 @@ export const STATUS = {
     colorVar: "var(--success-text)",
   },
 };
+
+// Unified status chip for a ticket — the SINGLE source of truth for "what state
+// is this ticket in". When an invoice run exists, the RUN status wins (queued /
+// llenando / lista para enviar / factura generada / falló / requiere ayuda); only
+// before any run do we show the receipt lifecycle (subido / leído / con error).
+//
+// Without this, the UI keyed the chip off ticket.status (the OCR lifecycle), so
+// every successfully-read ticket showed "Leído" forever — masking runs that were
+// in progress, awaiting the user, failed, or already done. Returns the same shape
+// as invoiceChip(): { label, tone, className }.
+export function ticketChip(ticket) {
+  if (ticket?.invoice?.status) {
+    return invoiceChip(ticket.invoice.status);
+  }
+  const s = STATUS[ticket?.status] || STATUS.uploaded;
+  return { label: s.label, tone: "settled", className: s.className };
+}
 
 const mxn = new Intl.NumberFormat("es-MX", {
   style: "currency",

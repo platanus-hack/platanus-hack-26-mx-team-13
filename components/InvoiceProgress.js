@@ -55,6 +55,9 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
   // polling effect (the status itself hasn't changed, so it wouldn't re-run).
   const [pollStalled, setPollStalled] = useState(false);
   const [pollNonce, setPollNonce] = useState(0);
+  // Browserbase live-view URL while an automated run is in flight — the modal
+  // embeds it READ-ONLY so the user watches the form being filled (demo candy).
+  const [runLiveView, setRunLiveView] = useState(null);
 
   // Re-seed when the row changes to a different ticket (lists reuse this
   // component across rows). Within one ticket, polling owns `invoice` state.
@@ -139,6 +142,40 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [invoice?.status, refresh, pollNonce]);
+
+  // While an automated run is in flight (not awaiting_human — that has its own
+  // INTERACTIVE panel), poll the Browserbase live-view URL so the detail modal can
+  // embed the browser read-only. Compact list rows don't embed it. The URL appears
+  // once the session opens and disappears when the run finishes (session released).
+  useEffect(() => {
+    const status = invoice?.status;
+    const active =
+      !compact &&
+      status &&
+      isPollableInvoiceStatus(status) &&
+      status !== INVOICE_STATUS.AWAITING_HUMAN;
+    if (!active) {
+      setRunLiveView(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const fetchUrl = async () => {
+      try {
+        const res = await fetch(`/api/user/tickets/${ticket.id}/liveview`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setRunLiveView(data.url || null);
+      } catch {
+        // Transient — keep the last URL and retry on the next tick.
+      }
+    };
+    fetchUrl();
+    const timer = setInterval(fetchUrl, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [invoice?.status, compact, ticket.id]);
 
   // Re-arm polling after it stalled (manual "Actualizar").
   const retryPolling = useCallback((event) => {
@@ -461,6 +498,30 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
                 </p>
               ) : null}
               {generateButton}
+            </div>
+          ) : null}
+
+          {/* Read-only live view: watch the assistant drive the portal while the
+              run is in flight. The wrapper swallows pointer events so it's
+              view-only (interacting is the awaiting_human panel's job). */}
+          {runLiveView && invoice.status !== INVOICE_STATUS.AWAITING_HUMAN ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
+                El asistente está llenando tu factura — míralo en vivo
+              </div>
+              <div className="overflow-hidden rounded-lg border border-black/[.08] dark:border-white/[.145]">
+                <div style={{ pointerEvents: "none" }}>
+                  <iframe
+                    src={runLiveView}
+                    title="Vista en vivo del navegador"
+                    sandbox="allow-same-origin allow-scripts"
+                    tabIndex={-1}
+                    scrolling="no"
+                    className="h-[420px] w-full border-0"
+                  />
+                </div>
+              </div>
             </div>
           ) : null}
 
