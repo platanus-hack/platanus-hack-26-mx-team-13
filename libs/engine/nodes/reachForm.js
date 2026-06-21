@@ -165,6 +165,33 @@ async function settle(page) {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Analyze a page, but POLL until its form has rendered before giving a verdict.
+ * Merchant portals are SPAs (Alsuper renders the fiscal form client-side after
+ * load), so a single analyze at domcontentloaded races the render and can see
+ * zero inputs — making a page that IS the form look empty. Re-analyze until the
+ * page reads as a real form, reads as blocked, or the budget elapses; return the
+ * last signals either way. Free (no AI) — just a few extra DOM reads.
+ *
+ * @param {import("playwright").Page} page
+ * @param {{timeoutMs?: number, intervalMs?: number}} [opts]
+ */
+async function analyzePageReady(page, { timeoutMs = 9000, intervalMs = 600 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let signals = await analyzePage(page);
+  while (
+    Date.now() < deadline &&
+    !isRealForm(signals) &&
+    !classifyBlocker(signals)
+  ) {
+    await sleep(intervalMs);
+    signals = await analyzePage(page);
+  }
+  return signals;
+}
+
 /**
  * Read structured signals from the live DOM of one page. Runs entirely in the
  * browser (page.evaluate) so it is free and never touches the AI. Returns null when
@@ -322,7 +349,8 @@ function collectPages(stagehand) {
  */
 async function findFormPage(pages) {
   for (const page of pages) {
-    const signals = await analyzePage(page);
+    // Poll per tab — the form may still be rendering when the agent stops.
+    const signals = await analyzePageReady(page);
     if (isRealForm(signals)) return { page, signals };
   }
   return null;
@@ -459,7 +487,9 @@ export async function reachForm(state) {
   try {
     // Stagehand v3 has no stagehand.page — resolve the live page off the context.
     const page = getActivePage(stagehand);
-    const landingSignals = await analyzePage(page);
+    // Poll for the form to render (SPA portals lazy-render it) before judging the
+    // landing page — a single read can race the render and miss a form that's there.
+    const landingSignals = await analyzePageReady(page);
 
     // Phase 1 — DOM blocker check (free). A blocked landing page fails fast with a
     // classified, correctly human-resolvable error; no point spending AI on it.
