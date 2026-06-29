@@ -77,6 +77,51 @@ function dateYMD(value) {
 }
 
 /**
+ * Select an <option> in a native <select> WITHOUT page.selectOption — the engine's
+ * Stagehand-wrapped page doesn't expose it (only locator/evaluate, like the OXXO
+ * driver). We set `.value` and dispatch input+change inside the page so any
+ * client-side handler (and the eventual form POST) sees the choice. The picker
+ * receives the option list and returns the chosen value, so caller-side logic
+ * (number vs name match) runs in Node, not the browser.
+ *
+ * @param {import("playwright").Page} page
+ * @param {string} selector - CSS selector for the <select>.
+ * @param {(opts: {value:string,text:string}[]) => string|null} pick - returns the value to select.
+ * @returns {Promise<string|null>} the selected value, or null when nothing matched.
+ */
+async function selectOptionInPage(page, selector, pick) {
+  const options = await page
+    .evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (!el || el.tagName !== "SELECT") return null;
+      return [...el.options].map((o) => ({
+        value: o.value,
+        text: (o.textContent || "").trim(),
+      }));
+    }, selector)
+    .catch(() => null);
+  if (!options || !options.length) return null;
+
+  const value = pick(options);
+  if (value == null) return null;
+
+  const ok = await page
+    .evaluate(
+      ({ sel, val }) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        el.value = val;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return el.value === val;
+      },
+      { sel: selector, val: value }
+    )
+    .catch(() => false);
+  return ok ? value : null;
+}
+
+/**
  * Select the SUCURSAL. The option VALUE is the store/"Tienda" number, so prefer the
  * numeric match (robust); fall back to matching the branch NAME (e.g. "BOSQUES")
  * against the option text. `sucursal` may arrive as the tienda number ("058"), the
@@ -86,39 +131,27 @@ async function selectSucursal(page, sucursal) {
   const raw = String(sucursal ?? "").trim();
   if (!raw) return false;
 
-  const options = await page
-    .evaluate(() =>
-      [...document.querySelectorAll("#Sucursal option")].map((o) => ({
-        value: o.value,
-        text: (o.textContent || "").trim().toUpperCase(),
-      }))
-    )
-    .catch(() => []);
-  if (!options.length) return false;
-
-  // 1) Numeric: tienda number → option value (strip leading zeros).
   const digits = raw.replace(/\D/g, "");
-  if (digits) {
-    const want = String(parseInt(digits, 10));
-    const byValue = options.find((o) => o.value === want);
-    if (byValue) {
-      await page.selectOption("#Sucursal", byValue.value).catch(() => {});
-      log.info("Alsuper: sucursal by tienda number", { value: byValue.value });
-      return true;
-    }
-  }
-
-  // 2) Name: an option whose text appears as a token in the (uppercased) sucursal.
   const up = raw.toUpperCase();
-  const byName = options.find(
-    (o) => o.value && o.text && (up.includes(o.text) || o.text.includes(up))
-  );
-  if (byName) {
-    await page.selectOption("#Sucursal", byName.value).catch(() => {});
-    log.info("Alsuper: sucursal by name", { text: byName.text, value: byName.value });
+  const chosen = await selectOptionInPage(page, "#Sucursal", (opts) => {
+    // 1) Numeric: tienda number → option value (strip leading zeros).
+    if (digits) {
+      const want = String(parseInt(digits, 10));
+      const byValue = opts.find((o) => o.value === want);
+      if (byValue) return byValue.value;
+    }
+    // 2) Name: an option whose text overlaps the (uppercased) sucursal.
+    const byName = opts.find((o) => {
+      const t = o.text.toUpperCase();
+      return o.value && t && (up.includes(t) || t.includes(up));
+    });
+    return byName ? byName.value : null;
+  });
+
+  if (chosen != null) {
+    log.info("Alsuper: sucursal selected", { value: chosen });
     return true;
   }
-
   log.warn("Alsuper: could not match sucursal", { sucursal: raw });
   return false;
 }
@@ -129,6 +162,21 @@ async function setField(page, selector, value) {
   const loc = page.locator(selector).first();
   await loc.click({ timeout: 4000 }).catch(() => {});
   await loc.fill(String(value), { timeout: 5000 }).catch(() => {});
+}
+
+/** Click the first control matching any of the CSS selectors. Returns true if one was clicked. */
+async function clickFirst(page, selectors, timeout = 8000) {
+  for (const sel of selectors) {
+    const loc = page.locator(sel).first();
+    if (await loc.count().catch(() => 0)) {
+      const clicked = await loc
+        .click({ timeout })
+        .then(() => true)
+        .catch(() => false);
+      if (clicked) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -157,7 +205,11 @@ export async function driveAlsuperToDownload(page, data) {
   if (data.rfc) await setField(page, "#RFCCliente", String(data.rfc).toUpperCase());
   if (data.email) await setField(page, "#CorreoElectronico", data.email);
 
-  await page.locator("#btnFacturar").first().click({ timeout: 8000 }).catch(() => {});
+  await clickFirst(page, [
+    "#btnFacturar",
+    'button:has-text("Facturar")',
+    'input[type=submit]',
+  ]);
 
   // Validation gate: a valid ticket navigates to /Facturacion (the receptor step);
   // an already-invoiced / rejected ticket stays on the lookup with a message modal.
@@ -209,37 +261,54 @@ export async function driveAlsuperToDownload(page, data) {
   // --- Step 2: receptor (USO CFDI is the only field; the rest auto-fills from RFC) ---
   await page.waitForTimeout(1500);
   const uso = data.cfdiUsage || "G03";
-  // Prefer the labeled select; fall back to any <select> that carries the uso code.
-  try {
-    await page.getByLabel("USO CFDI").selectOption(uso, { timeout: 5000 });
-  } catch {
-    await page
-      .evaluate((code) => {
-        for (const s of document.querySelectorAll("select")) {
-          if ([...s.options].some((o) => o.value === code)) {
-            s.value = code;
-            s.dispatchEvent(new Event("change", { bubbles: true }));
-            return;
-          }
-        }
-      }, uso)
-      .catch(() => {});
+  // The USO CFDI <select>: prefer one labeled "USO CFDI", else any select carrying
+  // the uso code as an option value. Match by code value first, then by option text.
+  const usoSelector = await page
+    .evaluate((code) => {
+      const selects = [...document.querySelectorAll("select")];
+      // by an associated <label> mentioning "uso cfdi"
+      for (const lab of document.querySelectorAll("label")) {
+        if (!/uso\s*cfdi/i.test(lab.textContent || "")) continue;
+        const forId = lab.getAttribute("for");
+        const el = forId
+          ? document.getElementById(forId)
+          : lab.querySelector("select");
+        if (el && el.tagName === "SELECT" && el.id) return `#${el.id}`;
+      }
+      // else the select that actually offers this uso code
+      const byCode = selects.find((s) =>
+        [...s.options].some((o) => o.value === code)
+      );
+      return byCode && byCode.id ? `#${byCode.id}` : null;
+    }, uso)
+    .catch(() => null);
+
+  if (usoSelector) {
+    await selectOptionInPage(page, usoSelector, (opts) => {
+      const byVal = opts.find((o) => o.value === uso);
+      if (byVal) return byVal.value;
+      const byText = opts.find((o) => o.text.toUpperCase().includes(uso));
+      return byText ? byText.value : null;
+    });
+  } else {
+    log.warn("Alsuper: USO CFDI select not found", { uso });
   }
 
   // Generate (this IS the submit/delivery for Alsuper).
-  await page
-    .getByRole("button", { name: "Facturar", exact: true })
-    .click({ timeout: 8000 })
-    .catch(async () => {
-      await page.locator("button[type=submit]").first().click({ timeout: 6000 }).catch(() => {});
-    });
+  await page.waitForTimeout(600);
+  await clickFirst(page, [
+    'button:has-text("Facturar")',
+    'input[type=submit][value*="Facturar"]',
+    'button[type=submit]',
+    'input[type=submit]',
+  ]);
 
-  // Wait for the success / download screen. Expose the download buttons by following
+  // Wait for the success / download screen. Expose the download controls by following
   // "Ver mis facturas" when it appears, so delivery.js can collect PDF + XML.
   let reachedDownload = false;
   for (let s = 0; s < 14; s++) {
     await page.waitForTimeout(2000);
-    const ver = page.getByRole("link", { name: /ver mis facturas/i }).first();
+    const ver = page.locator('a:has-text("Ver mis facturas")').first();
     if (await ver.count().catch(() => 0)) {
       await ver.click({ timeout: 4000 }).catch(() => {});
       await page.waitForTimeout(1500);
@@ -247,7 +316,9 @@ export async function driveAlsuperToDownload(page, data) {
     reachedDownload = await page
       .evaluate(() =>
         !![...document.querySelectorAll("button,input[type=submit],a")].find((e) =>
-          /descargar (pdf|xml)|guardar|factura generada/i.test(e.innerText || e.value || "")
+          /descargar (pdf|xml)|guardar|factura generada/i.test(
+            e.innerText || e.value || e.getAttribute("aria-label") || e.title || ""
+          )
         )
       )
       .catch(() => false);
