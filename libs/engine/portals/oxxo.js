@@ -22,6 +22,7 @@
 // which IS the submit for this portal (delivery, not a draft).
 
 import { getTaxRegimeName, getCfdiUsageName } from "@/data/sat-catalogs";
+import { classifyPortalOutcome } from "@/libs/engine/classifyOutcome";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:portal:oxxo" });
@@ -76,7 +77,24 @@ const VALID_TOAST = "ticket ingresado es válido";
 // appears for these, so detect them explicitly instead of spinning out the
 // validation budget and reporting a generic non-validation. Covers "ya fue
 // facturado", "ya está facturado", "ya se encuentra facturado/a", etc.
-const ALREADY_INVOICED_RE = /ya\s.{0,30}facturad[oa]|previamente\sfacturad[oa]|ticket\sya\sfacturad/i;
+// Matches OXXO's "already invoiced" toast in EITHER word order — the real toast is
+// "El ticket fue facturado previamente" (facturado BEFORE previamente), which the old
+// `previamente\sfacturado` pattern missed, so the run fell through to a generic
+// non-validation and the session lingered. Also covers "ya (fue) facturado".
+const ALREADY_INVOICED_RE =
+  /facturad[oa]\s+previamente|previamente\s+facturad[oa]|ya\s.{0,30}facturad[oa]|ticket\s.{0,20}facturad[oa]/i;
+
+// Notes handed to the AI checkpoint (classifyPortalOutcome) when the deterministic
+// toast/regex is inconclusive — a short description of the states OXXO's portal can
+// show after "Validar Ticket" so the model can catalog the page even when the wording
+// shifts. (For data-driven merchants these would live on the recipe; OXXO is
+// hand-authored, so they live with the driver.)
+const OXXO_OUTCOME_NOTES = [
+  'After "Validar Ticket", OXXO shows a transient top-right toast.',
+  '"El ticket ingresado es válido" → validated.',
+  '"El ticket fue facturado previamente" / "ya fue facturado" → already_invoiced (terminal).',
+  "Wrong fecha de venta / folio / ID de venta / total, or ticket not found → rejected.",
+].join(" ");
 
 /** CSS id selector for a PrimeFaces `form:<id>` element (escapes the colon). */
 const E = (id) => "#form\\:" + String(id).replace(/:/g, "\\:");
@@ -85,6 +103,35 @@ const E = (id) => "#form\\:" + String(id).replace(/:/g, "\\:");
 async function bodyText(page) {
   const t = await page.locator("body").first().innerText().catch(() => "");
   return t.replace(/\s+/g, " ");
+}
+
+/**
+ * Text of any visible toast / notification widget (PrimeFaces growl/messages,
+ * role=alert). OXXO's toasts are TRANSIENT — they fade after a few seconds — so the
+ * validation loop calls this every tick and accumulates what it sees: a message that
+ * flashed and faded mid-loop is still recorded for the AI checkpoint.
+ */
+async function toastText(page) {
+  return page
+    .evaluate(() => {
+      const sels = [
+        ".ui-growl-item",
+        ".ui-growl-message",
+        ".ui-growl",
+        ".ui-messages",
+        ".ui-message",
+        "[role=alert]",
+      ];
+      const out = [];
+      for (const sel of sels) {
+        for (const el of document.querySelectorAll(sel)) {
+          const t = (el.innerText || el.textContent || "").trim();
+          if (t) out.push(t);
+        }
+      }
+      return out.join(" | ");
+    })
+    .catch(() => "");
 }
 
 /** Click + fill an input by its `form:<id>`, best-effort. */
@@ -239,18 +286,50 @@ export async function driveOxxoToDownload(page, data) {
   // the run ends with a clear terminal reason instead of a generic non-validation.
   let validated = false;
   let alreadyInvoiced = false;
+  // Toasts are TRANSIENT, so accumulate every toast/message seen across the polling
+  // window: a message that flashed and faded mid-loop stays available to the regex
+  // (below) and the AI checkpoint (after the loop).
+  const seenToasts = new Set();
+  let lastBody = "";
   for (let s = 0; s < 7; s++) {
     await page.waitForTimeout(1800);
     const body = await bodyText(page);
-    if (body.includes(VALID_TOAST)) {
+    lastBody = body || lastBody;
+    const toast = await toastText(page);
+    if (toast) toast.split(" | ").forEach((t) => t && seenToasts.add(t));
+    const hay = `${body} ${[...seenToasts].join(" ")}`;
+    if (hay.includes(VALID_TOAST)) {
       validated = true;
       break;
     }
-    if (ALREADY_INVOICED_RE.test(body)) {
+    if (ALREADY_INVOICED_RE.test(hay)) {
       alreadyInvoiced = true;
       break;
     }
   }
+
+  // Hybrid AI checkpoint — deterministic first (above), model as fallback. The portal's
+  // wording varies, so when neither signal fired ask a model to CATALOG the state from
+  // the ACCUMULATED toast text (transient ones included) + the last body snapshot.
+  if (!validated && !alreadyInvoiced) {
+    const pageText = `${[...seenToasts].join(" | ")}\n${lastBody}`.trim();
+    const verdict = await classifyPortalOutcome({ pageText, notes: OXXO_OUTCOME_NOTES });
+    if (verdict) {
+      log.info("OXXO: AI checkpoint verdict", {
+        outcome: verdict.outcome,
+        confidence: verdict.confidence,
+        reason: verdict.reason,
+      });
+      if (verdict.outcome === "already_invoiced" && (verdict.confidence ?? 1) >= 0.6) {
+        alreadyInvoiced = true;
+      } else if (verdict.outcome === "validated" && (verdict.confidence ?? 0) >= 0.85) {
+        validated = true;
+      }
+      // rejected / error / unknown → leave validated=false → deliver_invoice maps it to
+      // FORM_REJECTED (human-resolvable handoff), unchanged from before.
+    }
+  }
+
   if (alreadyInvoiced) {
     log.warn("OXXO: ticket already invoiced", { folio: data.folio });
     return { validated: false, alreadyInvoiced: true, generated: false, reachedDownload: false };
