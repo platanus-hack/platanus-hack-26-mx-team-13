@@ -3,8 +3,9 @@ import mongoose from "mongoose";
 import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Ticket from "@/models/Ticket";
-import { getObjectBuffer } from "@/libs/storage/r2";
+import { getObjectBuffer, putObjectBuffer, deleteObject } from "@/libs/storage/r2";
 import { enhanceForOCR } from "@/libs/image/enhancement";
+import { isHeic, heicToJpeg } from "@/libs/image/heic";
 import { ocrImage } from "@/libs/ocr/googleVision";
 import { parseTicket } from "@/libs/ocr/parseTicket";
 import { resolveMerchant } from "@/libs/engine/resolveMerchant";
@@ -207,7 +208,48 @@ export async function POST(request, { params }) {
     }
 
     // Step 1: pull the receipt image back from R2 and OCR it.
-    const buffer = await getObjectBuffer(ticket.imageKey);
+    let buffer = await getObjectBuffer(ticket.imageKey);
+
+    // HEIC (default iPhone format): neither Vision, the browser thumbnail, nor our
+    // Sharp/QR pipeline can decode HEVC-coded HEIC. Transcode to JPEG once, persist
+    // it back to R2 under a .jpg key (so the <img> thumbnail renders too), repoint
+    // the ticket, and continue the pipeline on the JPEG bytes. A conversion failure
+    // returns a clear 415 and leaves the ticket at "uploaded".
+    if (isHeic(buffer)) {
+      try {
+        const jpeg = await heicToJpeg(buffer);
+        const oldKey = ticket.imageKey;
+        const jpegKey = `${oldKey.replace(/\.[^./]+$/, "")}.jpg`;
+        await putObjectBuffer({ key: jpegKey, body: jpeg, contentType: "image/jpeg" });
+        ticket.imageKey = jpegKey;
+        await ticket.save();
+        buffer = jpeg;
+        if (oldKey !== jpegKey) {
+          await deleteObject(oldKey).catch((err) =>
+            log.warn("Failed to delete original HEIC after conversion", {
+              ticketId: ticket._id.toString(),
+              message: err?.message,
+            })
+          );
+        }
+        log.info("Converted HEIC ticket to JPEG", {
+          ticketId: ticket._id.toString(),
+          jpegKey,
+        });
+      } catch (error) {
+        log.warn("HEIC conversion failed", {
+          ticketId: ticket._id.toString(),
+          message: error?.message,
+        });
+        return NextResponse.json(
+          {
+            error:
+              "No pudimos procesar esta imagen HEIC — vuelve a subir el ticket como JPG o PNG.",
+          },
+          { status: 415 }
+        );
+      }
+    }
 
     // The upload endpoint accepts PDFs for tickets, but Vision's
     // documentTextDetection only handles raster image bytes — a PDF would make
