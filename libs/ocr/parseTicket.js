@@ -131,9 +131,12 @@ Rules:
  * Parse raw receipt OCR text into structured ticket fields using Claude Haiku.
  *
  * @param {string} rawText - The OCR text returned by Google Vision.
- * @returns {Promise<{rfcEmisor: string|null, folio: string|null, total: number|null, subtotal: number|null, date: string|null, merchantNameGuess: string|null, sucursal: string|null, puntoVenta: string|null, paymentMethod: string|null}>}
+ * @param {Object} [opts] - Optional per-merchant extraction hints.
+ * @param {{ important?: string[], notes?: string|null }|null} [opts.fieldHints] - KnownMerchant.fieldHints to steer extraction.
+ * @param {{ merchantName?: string|null }|null} [opts.merchant] - The resolved merchant, for prompt context.
+ * @returns {Promise<{rfcEmisor: string|null, folio: string|null, total: number|null, subtotal: number|null, date: string|null, merchantNameGuess: string|null, sucursal: string|null, puntoVenta: string|null, paymentMethod: string|null, venta: string|null}>}
  */
-export async function parseTicket(rawText) {
+export async function parseTicket(rawText, opts = {}) {
   if (!rawText || !rawText.trim()) {
     throw new Error("parseTicket: rawText is empty");
   }
@@ -150,7 +153,7 @@ export async function parseTicket(rawText) {
   const response = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 1024,
-    system: SYSTEM_PROMPT,
+    system: SYSTEM_PROMPT + merchantPromptBlock(opts.fieldHints, opts.merchant),
     tools: [EXTRACT_TOOL],
     // Force the model to call our tool so we always get strict JSON back.
     tool_choice: { type: "tool", name: EXTRACT_TOOL.name },
@@ -184,6 +187,33 @@ export async function parseTicket(rawText) {
   });
 
   return merged;
+}
+
+/**
+ * Build a merchant-specific addendum to the system prompt from KnownMerchant
+ * fieldHints. Returns "" when there are no usable hints, so the base prompt is
+ * unchanged for unknown merchants (backward compatible).
+ *
+ * @param {{ important?: string[], notes?: string|null }|null|undefined} fieldHints
+ * @param {{ merchantName?: string|null }|null|undefined} merchant
+ * @returns {string}
+ */
+function merchantPromptBlock(fieldHints, merchant) {
+  if (!fieldHints) return "";
+  const important = Array.isArray(fieldHints.important)
+    ? fieldHints.important.filter(Boolean)
+    : [];
+  if (!important.length && !fieldHints.notes) return "";
+
+  const who = merchant?.merchantName
+    ? `from ${merchant.merchantName}`
+    : "from a known merchant";
+  const lines = [
+    `\n\nThis receipt is ${who}. It reliably prints the fields below — read them carefully and prefer them when present:`,
+  ];
+  for (const f of important) lines.push(`- ${f}`);
+  if (fieldHints.notes) lines.push(`Notes: ${fieldHints.notes}`);
+  return lines.join("\n");
 }
 
 /**

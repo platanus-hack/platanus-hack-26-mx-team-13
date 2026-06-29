@@ -96,6 +96,10 @@ export default function TicketsTable() {
   // The cleanup aborts the in-flight request so its response can't apply to the
   // newly-selected tab.
   useEffect(() => {
+    // Fetch on mount / tab change. fetchPage flips the loading flag on synchronously
+    // by design (immediate spinner on a tab switch); the cascading-render warning is
+    // expected for this data-fetching effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchPage(activeTab, null);
     return () => abortRef.current?.abort();
   }, [activeTab, fetchPage]);

@@ -6,6 +6,7 @@ import { Button, Badge, FilterTabs } from "@/components/ui";
 import { UploadFlow } from "@/components/upload/UploadFlow";
 import InvoiceProgress from "@/components/InvoiceProgress";
 import { formatTotal, formatDate, formatDateTime } from "@/components/ticketFormat";
+import { getCfdiUsageName } from "@/data/sat-catalogs";
 
 // Receipt-lifecycle chips — shown only BEFORE an invoice run exists.
 const STATUS_CONFIG = {
@@ -110,6 +111,15 @@ function TicketDetailModal({ ticket, onClose, onChange }) {
   // which InvoiceProgress surfaces below the fields.
   const isFailed = ticket.status === "failed";
   const e = ticket.extracted || {};
+  // Empresa + uso de CFDI come from the ticket (companyId may be populated).
+  const empresaCompany =
+    ticket.companyId && typeof ticket.companyId === "object" ? ticket.companyId : null;
+  const empresa = empresaCompany
+    ? empresaCompany.tradeName || empresaCompany.businessName || empresaCompany.rfc
+    : null;
+  const uso = ticket.usoCFDI
+    ? `${ticket.usoCFDI} - ${getCfdiUsageName(ticket.usoCFDI) || ""}`.trim()
+    : null;
 
   useEffect(() => {
     const handleKey = (e) => {
@@ -200,6 +210,8 @@ function TicketDetailModal({ ticket, onClose, onChange }) {
                     { label: "Folio", value: e.folio || "—", mono: true },
                     { label: "Subtotal", value: formatTotal(e.subtotal), mono: true },
                     { label: "Total", value: formatTotal(e.total), mono: true, brand: true },
+                    { label: "Empresa", value: empresa || "—" },
+                    { label: "Uso CFDI", value: uso || "—" },
                     { label: "Fecha del recibo", value: formatDate(e.date) || "—", noBorder: true },
                   ].map((row) => (
                     <div
@@ -281,6 +293,9 @@ export default function TicketsView() {
   }, []);
 
   useEffect(() => {
+    // Fetch on mount. loadTickets only setStates after awaiting the response (the
+    // recommended async-callback pattern), so there's no synchronous cascade here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadTickets();
   }, [loadTickets]);
 

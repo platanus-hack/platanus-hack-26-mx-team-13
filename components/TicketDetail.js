@@ -9,6 +9,16 @@ import {
 } from "@/components/ticketFormat";
 import { isAnimatedTone } from "@/components/invoiceFormat";
 import InvoiceProgress from "@/components/InvoiceProgress";
+import { getCfdiUsageName } from "@/data/sat-catalogs";
+
+// Resolve the empresa label from a (possibly populated) ticket.companyId, tolerating
+// a populated object, a raw id, or absence.
+function empresaLabel(companyId) {
+  if (companyId && typeof companyId === "object") {
+    return companyId.tradeName || companyId.businessName || companyId.rfc || null;
+  }
+  return null;
+}
 
 // The extracted fields, in display order, with how each value should render.
 // Centralizes the key/value panel so labels and formatting stay in one place.
@@ -55,6 +65,10 @@ export default function TicketDetail({ ticket, onClose, onChange }) {
   const chip = ticketChip(ticket);
   const e = ticket.extracted || {};
   const title = e.merchantNameGuess || e.rfcEmisor || "Receipt";
+  const empresa = empresaLabel(ticket.companyId);
+  const uso = ticket.usoCFDI
+    ? `${ticket.usoCFDI} - ${getCfdiUsageName(ticket.usoCFDI) || ""}`.trim()
+    : null;
 
   return (
     <div
@@ -143,6 +157,23 @@ export default function TicketDetail({ ticket, onClose, onChange }) {
                   </div>
                 );
               })}
+              {/* Empresa + Uso CFDI come from the ticket itself, not extracted. */}
+              <div className="flex items-baseline justify-between gap-4 py-2">
+                <dt className="shrink-0 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Empresa
+                </dt>
+                <dd className="min-w-0 truncate text-right text-sm font-medium text-black dark:text-zinc-100">
+                  {empresa || "—"}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-4 py-2">
+                <dt className="shrink-0 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Uso CFDI
+                </dt>
+                <dd className="min-w-0 truncate text-right text-sm font-medium text-black dark:text-zinc-100">
+                  {uso || "—"}
+                </dd>
+              </div>
             </dl>
           </div>
         </div>

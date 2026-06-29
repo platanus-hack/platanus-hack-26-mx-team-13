@@ -21,7 +21,7 @@
 // public flow) and never clicks a destructive control beyond "Generar Factura",
 // which IS the submit for this portal (delivery, not a draft).
 
-import { getTaxRegimeName } from "@/data/sat-catalogs";
+import { getTaxRegimeName, getCfdiUsageName } from "@/data/sat-catalogs";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:portal:oxxo" });
@@ -62,15 +62,12 @@ const REGIMEN_MATCH = {
   "626": "Simplificado de Confianza",
 };
 
-// Uso de CFDI code → option text keyword (OXXO lists by name).
-const USO_MATCH = {
-  G01: "Adquisición de mercancías",
+// OXXO lists Uso de CFDI options by NAME and selectByText matches the option whose
+// text CONTAINS this keyword. A few SAT names are too long/punctuated to substring-
+// match OXXO's option text reliably, so override just those with a robust shorter
+// keyword (e.g. G02). Everything else uses the central catalog name (getCfdiUsageName).
+const OXXO_USO_KEYWORD = {
   G02: "Devoluciones",
-  G03: "Gastos en general",
-  I01: "Construcciones",
-  P01: "Por definir",
-  S01: "Sin efectos fiscales",
-  CP01: "Pagos",
 };
 
 const VALID_TOAST = "ticket ingresado es válido";
@@ -282,7 +279,10 @@ export async function driveOxxoToDownload(page, data) {
     REGIMEN_MATCH[data.taxRegime] || getTaxRegimeName(data.taxRegime) || "";
   if (regimeKeyword) await selectByText(page, "selectOneMenuRegFis", regimeKeyword);
 
-  const usoKeyword = USO_MATCH[data.cfdiUsage] || "Gastos en general";
+  const usoKeyword =
+    OXXO_USO_KEYWORD[data.cfdiUsage] ||
+    getCfdiUsageName(data.cfdiUsage) ||
+    "Gastos en general";
   await selectByText(page, "selectOneMenuCFDI", usoKeyword);
 
   // --- Generate (this IS the submit/delivery for OXXO) ---

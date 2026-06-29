@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import toJSON from "./plugins/toJSON.js";
+import { normalizeName } from "@/libs/text/normalizeName";
 
 // KnownMerchant — the RFC-emisor → portal-URL registry. This is the
 // network-effect asset: once any user discovers a merchant's invoicing portal,
@@ -24,24 +25,26 @@ const knownMerchantSchema = new mongoose.Schema(
     invoiceUrl: { type: String, trim: true, default: null },
     // Free-form operator notes (quirks, login hints, etc.).
     notes: { type: String, default: null },
+    // Alternate names / spellings the OCR may yield (e.g. "OXXO Cuauhtémoc",
+    // "Sams", "Home Depot Mexico"). Used by findByName + the $text search so a
+    // branch-suffixed name still resolves to the canonical merchant.
+    aliases: { type: [String], default: [] },
+    // Static admin metadata that steers OCR extraction for THIS merchant's receipts
+    // (orthogonal to the versioned MerchantRecipe, which is about portal steps).
+    fieldHints: {
+      // Field labels the parser should hunt for, e.g. ["Folio de venta (Fol_Vta)"].
+      important: { type: [String], default: [] },
+      // Free-form guidance appended to the extraction prompt.
+      notes: { type: String, default: null },
+      // Optional ticket-label → billing dataKey map (consumed later; v2).
+      fieldMap: { type: mongoose.Schema.Types.Mixed, default: {} },
+    },
   },
   {
     timestamps: true,
     toJSON: { virtuals: true },
   }
 );
-
-/** Normalize a name to match normalizedName: lowercase, strip diacritics, drop punctuation. */
-function normalizeName(name) {
-  if (!name) return "";
-  return String(name)
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 /**
  * Look up a merchant by RFC emisor.
@@ -64,7 +67,30 @@ knownMerchantSchema.statics.findByRfc = function findByRfc(rfcEmisor) {
 knownMerchantSchema.statics.findByName = function findByName(name) {
   const normalized = normalizeName(name);
   if (!normalized) return Promise.resolve(null);
-  return this.findOne({ normalizedName: normalized });
+  // Match the canonical normalizedName OR any stored alias (aliases are stored
+  // already-normalized), so "OXXO Cuauhtémoc" → "oxxo cuauhtemoc" can resolve when
+  // it's listed as an alias even if it isn't the canonical name.
+  return this.findOne({
+    $or: [{ normalizedName: normalized }, { aliases: normalized }],
+  });
+};
+
+/**
+ * BM25 candidate search over the merchant text index (merchantName / aliases /
+ * normalizedName). Returns up to `limit` candidates, each with a `score`
+ * (textScore), best first. Requires the "merchant_text" index (built by the model
+ * or the seed). Lean docs — read-only candidates for the resolver.
+ * @param {string} query - Free-text query (a name guess or an OCR header slice).
+ * @param {number} [limit=5]
+ * @returns {Promise<Array<Object>>}
+ */
+knownMerchantSchema.statics.searchByText = function searchByText(query, limit = 5) {
+  const q = (query || "").trim();
+  if (!q) return Promise.resolve([]);
+  return this.find({ $text: { $search: q } }, { score: { $meta: "textScore" } })
+    .sort({ score: { $meta: "textScore" } })
+    .limit(limit)
+    .lean();
 };
 
 /**
@@ -84,6 +110,15 @@ knownMerchantSchema.statics.upsert = function upsert(rfcEmisor, data = {}) {
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
 };
+
+// Single text index (Mongo allows only ONE per collection) powering searchByText:
+// the merchant name is the strongest signal, then aliases, then the normalized name.
+// The seed script (scripts/seed-merchant.mjs) also ensures this index exists in prod
+// rather than relying solely on autoIndex.
+knownMerchantSchema.index(
+  { merchantName: "text", aliases: "text", normalizedName: "text" },
+  { name: "merchant_text", weights: { merchantName: 5, aliases: 4, normalizedName: 2 } }
+);
 
 // Convert mongoose docs to clean JSON (_id -> id, drop __v).
 knownMerchantSchema.plugin(toJSON);

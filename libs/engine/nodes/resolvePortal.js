@@ -35,6 +35,8 @@ import connectMongoose from "@/libs/core/mongoose";
 import KnownMerchant from "@/models/KnownMerchant";
 import MerchantRecipe from "@/models/MerchantRecipe";
 import Ticket from "@/models/Ticket";
+import { resolveMerchant } from "@/libs/engine/resolveMerchant";
+import { normalizeName, nameTokens } from "@/libs/text/normalizeName";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:resolve-portal" });
@@ -145,19 +147,13 @@ export async function resolvePortal(state) {
     };
   }
 
-  // 1. Cache — resolve the merchant from the KnownMerchant registry: by RFC (exact,
-  //    when the ticket carries one), else by normalized name (the common case). A hit
-  //    is instant and free.
-  let known = null;
-  let matchedBy = null;
-  if (rfcEmisor) {
-    known = await KnownMerchant.findByRfc(rfcEmisor);
-    if (known) matchedBy = "rfc";
-  }
-  if (!known && merchantName) {
-    known = await KnownMerchant.findByName(merchantName);
-    if (known) matchedBy = "name";
-  }
+  // 1. Cache — resolve the merchant via the shared resolver: exact RFC, else exact
+  //    name/alias, else BM25 text search, else AI disambiguation. After the OCR
+  //    route's RFC backfill most known merchants arrive with a canonical RFC, so this
+  //    is usually a free tier-1 hit; the AI tier only runs on genuinely ambiguous names.
+  const resolved = await resolveMerchant({ rfcEmisor, nameGuess: merchantName });
+  const known = resolved.merchant;
+  const matchedBy = known ? resolved.method : null;
 
   if (known?.invoiceUrl) {
     // Canonicalize the merchant key to the registry's RFC so the recipe lookup +
@@ -348,12 +344,12 @@ async function firecrawlSearch(apiKey, query) {
  * @returns {string|null}
  */
 function pickPortalUrl(results, merchantName) {
-  const nameTokens = nameTokensOf(merchantName);
+  const tokens = nameTokens(merchantName);
 
   let best = null;
   let bestScore = 0;
   for (const r of results) {
-    const score = scoreCandidate(r, nameTokens);
+    const score = scoreCandidate(r, tokens);
     if (score > bestScore) {
       best = r;
       bestScore = score;
@@ -379,10 +375,10 @@ function pickPortalUrl(results, merchantName) {
  * merchant). Denylisted hosts score 0.
  *
  * @param {{ url: string, title: string, description: string }} result
- * @param {string[]} nameTokens
+ * @param {string[]} tokens
  * @returns {number}
  */
-function scoreCandidate(result, nameTokens) {
+function scoreCandidate(result, tokens) {
   let host;
   let path;
   try {
@@ -405,42 +401,11 @@ function scoreCandidate(result, nameTokens) {
   // Facturación intent anywhere in the title/description.
   if (/factura|cfdi/.test(haystack)) score += 2;
   // Merchant-name overlap with the host.
-  for (const token of nameTokens) {
+  for (const token of tokens) {
     if (host.includes(token)) score += 2;
   }
 
   return score;
-}
-
-/**
- * Split a merchant name into lowercased, accent-stripped tokens worth matching
- * against a hostname. Short tokens (de, la, sa, cv, …) are dropped as noise.
- *
- * @param {string|null|undefined} merchantName
- * @returns {string[]}
- */
-function nameTokensOf(merchantName) {
-  return normalizeName(merchantName)
-    .split(" ")
-    .filter((t) => t.length >= 4);
-}
-
-/**
- * Normalize a name for fuzzy matching and for KnownMerchant.normalizedName:
- * lowercase, strip diacritics, drop punctuation, collapse whitespace.
- *
- * @param {string|null|undefined} name
- * @returns {string}
- */
-function normalizeName(name) {
-  if (!name) return "";
-  return name
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 /**

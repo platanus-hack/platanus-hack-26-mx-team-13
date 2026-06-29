@@ -27,6 +27,7 @@ import connectMongoose from "@/libs/core/mongoose";
 import MerchantRecipe from "@/models/MerchantRecipe";
 import { INVOICE_STATUS, INVOICE_METHOD } from "@/libs/engine/state";
 import { BILLING_DATA_KEYS } from "@/libs/engine/billingDataKeys";
+import { normalizeName } from "@/libs/text/normalizeName";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "engine:distill-recipe" });
@@ -59,25 +60,6 @@ const ACTION_ALIASES = Object.freeze({
 
 // Step actions that write a billing value (need a dataKey or a literal staticValue).
 const DATA_STEP_ACTIONS = new Set(["fill", "select"]);
-
-/**
- * Normalize a merchant name for normalizedName: lowercase, strip diacritics, drop
- * punctuation, collapse whitespace. Mirrors resolvePortal/KnownMerchant so the
- * recipe's normalizedName matches the merchant registry's.
- *
- * @param {string|null|undefined} name
- * @returns {string}
- */
-function normalizeName(name) {
-  if (!name) return "";
-  return name
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 /** First capture group of `re` against `value`, or null. */
 function match1(value, re) {

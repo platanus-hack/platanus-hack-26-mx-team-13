@@ -22,6 +22,13 @@ const userSchema = mongoose.Schema(
       enum: ["user", "admin"],
       default: "user",
     },
+    // The user's default empresa/constancia — preselected in the upload modal and
+    // used to invoice a ticket when none is chosen explicitly. Null until set.
+    defaultCompanyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      default: null,
+    },
   },
   {
     timestamps: true,

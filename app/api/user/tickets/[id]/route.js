@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Ticket from "@/models/Ticket";
+import Company from "@/models/Company";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "api:tickets:get" });
@@ -29,8 +30,13 @@ export async function GET(request, { params }) {
 
     await connectMongoose();
 
-    // Scope by userId so one user can never read another user's ticket.
-    const ticket = await Ticket.findOne({ _id: id, userId });
+    // Scope by userId so one user can never read another user's ticket. Populate
+    // the chosen empresa so the detail view can show it.
+    const ticket = await Ticket.findOne({ _id: id, userId }).populate({
+      path: "companyId",
+      select: "businessName tradeName rfc",
+      model: Company,
+    });
     if (!ticket) {
       return NextResponse.json({ error: "Ticket not found" }, { status: 404 });
     }

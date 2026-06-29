@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Ticket from "@/models/Ticket";
+import Company from "@/models/Company";
 import mongoose from "mongoose";
+import { getCfdiUsageName } from "@/data/sat-catalogs";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "api:tickets" });
@@ -91,10 +93,17 @@ export async function GET(request) {
       ];
     }
 
-    // Fetch one extra row to detect whether another page exists.
+    // Fetch one extra row to detect whether another page exists. Populate the
+    // chosen empresa so the list/detail can show it (model option keeps the Company
+    // import meaningful + guarantees the ref is registered).
     const docs = await Ticket.find(query)
       .sort({ createdAt: -1, _id: -1 })
-      .limit(limit + 1);
+      .limit(limit + 1)
+      .populate({
+        path: "companyId",
+        select: "businessName tradeName rfc",
+        model: Company,
+      });
 
     const hasMore = docs.length > limit;
     const page = hasMore ? docs.slice(0, limit) : docs;
@@ -114,11 +123,13 @@ export async function GET(request) {
 }
 
 // POST /api/user/tickets
-// Body: { imageKey }
+// Body: { imageKey, companyId?, usoCFDI? }
 // Records a freshly uploaded receipt: the client has already PUT the image to R2
 // (via /api/user/generate-upload-token with kind "ticket"), so here we just
 // persist a Ticket (status "uploaded") pointing at that R2 object and return its id.
-// OCR/engine processing is out of scope here (#15).
+// companyId (which empresa invoices it) and usoCFDI (tipo de gasto) are chosen in
+// the upload modal; both optional for back-compat. OCR/engine processing is out of
+// scope here (#15).
 export async function POST(request) {
   try {
     // Gate on the shared NextAuth session (libs/core/auth.js exposes user.id).
@@ -128,7 +139,9 @@ export async function POST(request) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    const { imageKey } = await request.json().catch(() => ({}));
+    const { imageKey, companyId, usoCFDI } = await request
+      .json()
+      .catch(() => ({}));
 
     if (!imageKey || typeof imageKey !== "string") {
       return NextResponse.json(
@@ -146,12 +159,40 @@ export async function POST(request) {
       );
     }
 
+    // usoCFDI is optional; when present it must be a real SAT c_UsoCFDI code.
+    if (usoCFDI != null && !getCfdiUsageName(usoCFDI)) {
+      return NextResponse.json({ error: "Invalid usoCFDI" }, { status: 400 });
+    }
+
     await connectMongoose();
+
+    // companyId is optional; when present it must be one of THIS user's active
+    // empresas (ownership check) so a ticket can't be pinned to someone else's CSF.
+    if (companyId != null) {
+      if (!mongoose.isValidObjectId(companyId)) {
+        return NextResponse.json({ error: "Invalid companyId" }, { status: 400 });
+      }
+      const owned = await Company.findOne({
+        _id: companyId,
+        userId,
+        isActive: true,
+      })
+        .select("_id")
+        .lean();
+      if (!owned) {
+        return NextResponse.json(
+          { error: "companyId does not belong to this user" },
+          { status: 400 }
+        );
+      }
+    }
 
     const ticket = await Ticket.create({
       userId,
       imageKey,
       status: "uploaded",
+      ...(companyId != null ? { companyId } : {}),
+      ...(usoCFDI != null ? { usoCFDI: String(usoCFDI).trim().toUpperCase() } : {}),
     });
 
     log.info("Ticket created", {
