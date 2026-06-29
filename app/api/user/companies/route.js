@@ -26,7 +26,7 @@ export async function GET() {
     await connectMongoose();
 
     const [docs, user] = await Promise.all([
-      Company.find({ userId, isActive: true }).sort({ createdAt: -1 }),
+      Company.find({ userId, isActive: { $ne: false } }).sort({ createdAt: -1 }),
       User.findById(userId).select("defaultCompanyId").lean(),
     ]);
 
@@ -71,7 +71,7 @@ export async function PATCH(request) {
     const company = await Company.findOne({
       _id: companyId,
       userId,
-      isActive: true,
+      isActive: { $ne: false },
     })
       .select("_id")
       .lean();

@@ -31,7 +31,7 @@ export async function DELETE(request, { params }) {
     await connectMongoose();
 
     const company = await Company.findOneAndUpdate(
-      { _id: id, userId, isActive: true },
+      { _id: id, userId, isActive: { $ne: false } },
       { $set: { isActive: false } },
       { new: true }
     );

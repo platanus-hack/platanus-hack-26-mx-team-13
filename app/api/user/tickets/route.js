@@ -175,7 +175,7 @@ export async function POST(request) {
       const owned = await Company.findOne({
         _id: companyId,
         userId,
-        isActive: true,
+        isActive: { $ne: false },
       })
         .select("_id")
         .lean();

@@ -7,7 +7,7 @@
 //   3. most-recently-created active Company for the user (legacy fallback, so
 //      existing tickets uploaded before this feature still invoice).
 //
-// Every candidate is scoped to { userId, isActive: true } so a soft-deleted or
+// Every candidate is scoped to { userId, isActive: { $ne: false } } so a soft-deleted or
 // cross-user company can never resolve. Returns a lean Company doc or null. The
 // caller is responsible for connecting mongoose first (this only queries).
 
@@ -27,7 +27,7 @@ export async function resolveCompanyForTicket({ ticket, userId, user } = {}) {
     const byTicket = await Company.findOne({
       _id: ticket.companyId,
       userId,
-      isActive: true,
+      isActive: { $ne: false },
     }).lean();
     if (byTicket) return byTicket;
   }
@@ -39,13 +39,13 @@ export async function resolveCompanyForTicket({ ticket, userId, user } = {}) {
     const byDefault = await Company.findOne({
       _id: u.defaultCompanyId,
       userId,
-      isActive: true,
+      isActive: { $ne: false },
     }).lean();
     if (byDefault) return byDefault;
   }
 
   // 3. Legacy fallback: most-recently-created active company.
-  return Company.findOne({ userId, isActive: true })
+  return Company.findOne({ userId, isActive: { $ne: false } })
     .sort({ createdAt: -1 })
     .lean();
 }

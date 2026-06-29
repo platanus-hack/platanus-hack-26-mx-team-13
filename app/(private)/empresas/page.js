@@ -19,7 +19,7 @@ export default async function EmpresasPage() {
   try {
     await connectMongoose();
     const [docs, user] = await Promise.all([
-      Company.find({ userId: session.user.id, isActive: true }).sort({
+      Company.find({ userId: session.user.id, isActive: { $ne: false } }).sort({
         createdAt: -1,
       }),
       User.findById(session.user.id).select("defaultCompanyId").lean(),

@@ -81,6 +81,10 @@ export async function POST(request) {
             operationsStartDate: data.operationsStartDate,
             fiscalAddress: data.fiscalAddress,
             csfPdfUrl: key,
+            // Uploading a CSF (re)activates the company: a re-upload of an RFC
+            // that was previously soft-deleted must come back as active, and the
+            // $set must not leave a stale isActive:false on the matched doc.
+            isActive: true,
           },
         },
         {
