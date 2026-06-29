@@ -8,6 +8,7 @@ import { enhanceForOCR } from "@/libs/image/enhancement";
 import { ocrImage } from "@/libs/ocr/googleVision";
 import { parseTicket } from "@/libs/ocr/parseTicket";
 import { resolveMerchant } from "@/libs/engine/resolveMerchant";
+import { startInvoiceRun } from "@/libs/engine/startInvoiceRun";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "api:tickets:ocr" });
@@ -335,10 +336,37 @@ export async function POST(request, { params }) {
       userId,
     });
 
+    // Auto-chain: kick off the invoice run immediately so upload→OCR→factura is one
+    // automatic flow (no manual "Generar factura" click). Best-effort — if the
+    // preflight fails (no CSF, no merchant identity) or the enqueue fails, leave the
+    // ticket at ocr_done so the user can start it manually from the ticket. Uses the
+    // SAME idempotent gate as the manual route, so it can't double-enqueue.
+    let invoiceRun = null;
+    try {
+      const started = await startInvoiceRun({
+        ticketId: ticket._id.toString(),
+        userId,
+      });
+      if (started.ok) {
+        invoiceRun = { runId: started.runId, status: started.status };
+      } else {
+        log.info("OCR auto-invoice not started", {
+          ticketId: ticket._id.toString(),
+          code: started.code,
+        });
+      }
+    } catch (error) {
+      log.warn("OCR auto-invoice failed (non-fatal)", {
+        ticketId: ticket._id.toString(),
+        message: error?.message,
+      });
+    }
+
     return NextResponse.json({
       ticketId: ticket._id.toString(),
       status: ticket.status,
       extracted,
+      invoiceRun,
     });
   } catch (error) {
     log.error("Ticket OCR failed:", error);
