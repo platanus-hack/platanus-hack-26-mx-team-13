@@ -15,10 +15,10 @@
 // MISSING_COMPANY_DATA. Resolving a single dataKey is done with getBillingValue().
 
 import connectMongoose from "@/libs/core/mongoose";
-import Company from "@/models/Company";
 import Ticket from "@/models/Ticket";
 import User from "@/models/User";
-import { getTaxRegimeName } from "@/data/sat-catalogs";
+import { resolveCompanyForTicket } from "@/libs/engine/resolveCompany";
+import { getTaxRegimeName, DEFAULT_CFDI_USAGE } from "@/data/sat-catalogs";
 import { ENGINE_ERRORS } from "./errorTypes.js";
 import { engineError } from "./node.js";
 
@@ -33,7 +33,7 @@ import { engineError } from "./node.js";
  * @property {string|null} taxRegime - Primary SAT tax-regime code (e.g. "626").
  * @property {string|null} taxRegimeFormatted - Human-readable regime name for that code.
  * @property {string|null} postalCode - Fiscal address postal code (código postal).
- * @property {string|null} cfdiUsage - Uso de CFDI; defaults to "G03" (Gastos en general) since no Company field captures it yet — the most common uso for expense receipts.
+ * @property {string|null} cfdiUsage - Uso de CFDI; the user's per-ticket choice (ticket.usoCFDI), else defaults to "G03" (Gastos en general).
  * @property {string|null} paymentMethod - Forma/método de pago; prefers extracted.paymentMethod, else defaults to "PUE" (Pago en una sola exhibición).
  *
  * From User (account):
@@ -80,18 +80,17 @@ function firstOf(value) {
 export async function assembleBillingData(ticketId, userId) {
   await connectMongoose();
 
-  // Company is keyed by userId. A user may hold more than one (multiple RFCs);
-  // prefer the most recently created active profile. The Ticket is scoped to the
-  // same userId so a mismatched id can never pair one user's receipt with another
-  // user's fiscal profile. User is looked up by id. All three reads are
-  // independent → run them together.
-  const [company, ticket, user] = await Promise.all([
-    Company.findOne({ userId, isActive: true })
-      .sort({ createdAt: -1 })
-      .lean(),
+  // Load the ticket + user first (independent), then resolve WHICH company invoices
+  // this ticket. A user may hold several constancias; resolveCompanyForTicket picks
+  // by precedence (ticket.companyId → user.defaultCompanyId → most recent active).
+  // The Ticket is scoped to userId so a mismatched id can never pair one user's
+  // receipt with another user's fiscal profile.
+  const [ticket, user] = await Promise.all([
     Ticket.findOne({ _id: ticketId, userId }).lean(),
     User.findById(userId).lean(),
   ]);
+
+  const company = await resolveCompanyForTicket({ ticket, userId, user });
 
   if (!company || !company.rfc) {
     throw engineError(
@@ -133,8 +132,9 @@ export async function assembleBillingData(ticketId, userId) {
     // CFDI defaults: most portals REQUIRE these, so a null leaves the form
     // incomplete. No Company field captures them yet, so we fall back to the
     // most common SAT values for expense receipts.
-    // "G03" = Gastos en general (the usual uso de CFDI for expenses).
-    cfdiUsage: "G03",
+    // Prefer the uso de CFDI the user picked at upload (ticket.usoCFDI); else
+    // default to "G03" = Gastos en general (the usual uso for expense receipts).
+    cfdiUsage: ticket.usoCFDI ?? DEFAULT_CFDI_USAGE,
     // Prefer a value the OCR extracted from the ticket; else "PUE" = Pago en
     // una sola exhibición (single-payment, by far the most common método).
     paymentMethod: extracted.paymentMethod ?? "PUE",

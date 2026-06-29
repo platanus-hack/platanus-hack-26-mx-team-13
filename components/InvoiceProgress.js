@@ -59,13 +59,19 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
   // embeds it READ-ONLY so the user watches the form being filled (demo candy).
   const [runLiveView, setRunLiveView] = useState(null);
 
-  // Re-seed when the row changes to a different ticket (lists reuse this
-  // component across rows). Within one ticket, polling owns `invoice` state.
-  useEffect(() => {
+  // Re-seed when the row changes to a different ticket (lists reuse this component
+  // across rows). Adjusting state during render — not in an effect — avoids the
+  // extra commit + cascading render a prop-sync effect causes. Within one ticket,
+  // polling owns `invoice` state.
+  const [seededId, setSeededId] = useState(ticket.id);
+  if (ticket.id !== seededId) {
+    setSeededId(ticket.id);
     setInvoice(ticket.invoice || null);
     setLiveDisconnected(false);
     setError(null);
-  }, [ticket.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    setPollStalled(false);
+    setRunLiveView(null);
+  }
 
   // The embedded Browserbase live view posts `browserbase-disconnected` when its
   // session ends (the human closed it, or the CDP session timed out). Surface
@@ -81,10 +87,15 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
-  // A fresh handoff clears any stale "disconnected" flag from a previous one.
-  useEffect(() => {
+  // A fresh handoff (status enters awaiting_human, or its live-view URL changes to a
+  // new session) clears any stale "disconnected" flag from a previous one. Tracked
+  // during render rather than in an effect to avoid a cascading re-render.
+  const handoffSig = `${invoice?.status ?? ""}|${invoice?.liveViewUrl ?? ""}`;
+  const [seenHandoffSig, setSeenHandoffSig] = useState(handoffSig);
+  if (handoffSig !== seenHandoffSig) {
+    setSeenHandoffSig(handoffSig);
     if (invoice?.status === INVOICE_STATUS.AWAITING_HUMAN) setLiveDisconnected(false);
-  }, [invoice?.status, invoice?.liveViewUrl]);
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -110,7 +121,6 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
     const status = invoice?.status;
     if (!status || !isPollableInvoiceStatus(status)) return undefined;
 
-    setPollStalled(false);
     const startedAt = Date.now();
     let timer = null;
 
@@ -154,10 +164,7 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
       status &&
       isPollableInvoiceStatus(status) &&
       status !== INVOICE_STATUS.AWAITING_HUMAN;
-    if (!active) {
-      setRunLiveView(null);
-      return undefined;
-    }
+    if (!active) return undefined;
     let cancelled = false;
     const fetchUrl = async () => {
       try {
@@ -171,15 +178,23 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
     };
     fetchUrl();
     const timer = setInterval(fetchUrl, POLL_INTERVAL_MS);
+    // Clear the embedded URL when this active period ends (status leaves the
+    // pollable range, handoff begins, or the row switches tickets) so a stale
+    // session iframe never lingers. Runs in cleanup, not the body, to keep the
+    // effect setState-free on setup.
     return () => {
       cancelled = true;
       clearInterval(timer);
+      setRunLiveView(null);
     };
   }, [invoice?.status, compact, ticket.id]);
 
-  // Re-arm polling after it stalled (manual "Actualizar").
+  // Re-arm polling after it stalled (manual "Actualizar"). Clearing the stalled
+  // flag here (an event handler) rather than in the polling effect keeps that
+  // effect free of synchronous setState while still resetting on every restart.
   const retryPolling = useCallback((event) => {
     event?.stopPropagation?.();
+    setPollStalled(false);
     setPollNonce((n) => n + 1);
   }, []);
 
@@ -188,6 +203,7 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
       event?.stopPropagation?.();
       setStarting(true);
       setError(null);
+      setPollStalled(false);
       try {
         const res = await fetch(`/api/user/tickets/${ticket.id}/invoice`, {
           method: "POST",

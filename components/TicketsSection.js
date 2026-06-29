@@ -40,6 +40,9 @@ export default function TicketsSection({ compact = false, reloadKey = 0 }) {
   // Reload on mount and whenever reloadKey bumps (e.g. the parent just finished an
   // upload) so a freshly-uploaded ticket appears without a manual hard refresh.
   useEffect(() => {
+    // load only setStates after awaiting the response (the recommended
+    // async-callback pattern), so there's no synchronous cascade here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load, reloadKey]);
 

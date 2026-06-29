@@ -7,6 +7,7 @@ import { getObjectBuffer } from "@/libs/storage/r2";
 import { enhanceForOCR } from "@/libs/image/enhancement";
 import { ocrImage } from "@/libs/ocr/googleVision";
 import { parseTicket } from "@/libs/ocr/parseTicket";
+import { resolveMerchant } from "@/libs/engine/resolveMerchant";
 import { createLogger } from "@/libs/core/logger";
 
 const log = createLogger({ component: "api:tickets:ocr" });
@@ -36,6 +37,14 @@ function isHttpUrl(value) {
   } catch {
     return false;
   }
+}
+
+// Best-effort: pull a Mexican RFC (12-13 chars) out of OCR text — used to seed the
+// merchant resolver's exact-RFC tier. Tolerates the dash/space separators tickets
+// often print (e.g. OXXO's "CCO-860523-1N4"). Returns the compact RFC, or null.
+function extractRfc(text) {
+  const m = /\b([A-ZÑ&]{3,4})[-\s]?(\d{6})[-\s]?([A-Z0-9]{3})\b/i.exec(text || "");
+  return m ? (m[1] + m[2] + m[3]).toUpperCase() : null;
 }
 
 // Whether a URL looks like a facturación portal: a strong signal is "factura",
@@ -245,8 +254,41 @@ export async function POST(request, { params }) {
       );
     }
 
-    // Step 2: structure the raw text with Haiku.
-    const extracted = await parseTicket(rawText);
+    // Detect the merchant BEFORE parsing so we can (a) steer extraction with this
+    // merchant's field hints and (b) backfill the canonical RFC for the engine.
+    // Best-effort: a detection failure must NEVER break OCR. We seed the resolver
+    // with an RFC regex'd off the ticket (tier-1 fast path) and the raw OCR text
+    // (BM25 over the header), so a name like "OXXO Cuauhtémoc" still resolves.
+    let resolvedMerchant = null;
+    try {
+      const rfcGuess = extractRfc(rawText);
+      const { merchant, method } = await resolveMerchant({
+        rfcEmisor: rfcGuess,
+        ocrText: rawText,
+      });
+      resolvedMerchant = merchant;
+      if (merchant) {
+        log.info("Merchant resolved at OCR time", {
+          ticketId: ticket._id.toString(),
+          merchant: merchant.merchantName,
+          method,
+        });
+      }
+    } catch (error) {
+      log.warn("Merchant detection failed (non-fatal)", {
+        ticketId: ticket._id.toString(),
+        message: error?.message,
+      });
+    }
+
+    // Step 2: structure the raw text with Haiku, steered by this merchant's field
+    // hints when we have them (otherwise a plain parse — backward compatible).
+    const extracted = await parseTicket(
+      rawText,
+      resolvedMerchant?.fieldHints
+        ? { fieldHints: resolvedMerchant.fieldHints, merchant: resolvedMerchant }
+        : {}
+    );
 
     // Guard: none of the key fields came through — treat as low-confidence and
     // don't flip status. rfcEmisor is the deterministic merchant key downstream,
@@ -270,6 +312,13 @@ export async function POST(request, { params }) {
         { error: "Could not extract receipt details — please retry with a clearer image" },
         { status: 422 }
       );
+    }
+
+    // Backfill the canonical merchant RFC (gap-fill only — never override an RFC the
+    // OCR actually read off the ticket) so the engine's resolve_portal is an instant
+    // tier-1 cache hit by RFC and the deterministic driver (e.g. OXXO) fires.
+    if (resolvedMerchant?.rfcEmisor && extracted.rfcEmisor == null) {
+      extracted.rfcEmisor = resolvedMerchant.rfcEmisor;
     }
 
     ticket.ocrText = rawText;

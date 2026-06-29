@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { X, Camera, Upload, Check, SwitchCamera } from "lucide-react";
+import { X, Camera, Upload, Check, SwitchCamera, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui";
+import { CFDI_USAGE_OPTIONS, DEFAULT_CFDI_USAGE } from "@/data/sat-catalogs";
 import toast from "react-hot-toast";
 
 const ACCEPT = "image/*";
@@ -13,6 +14,14 @@ export function UploadFlow({ onClose }) {
   const [showCamera, setShowCamera] = useState(false);
   const [stream, setStream] = useState(null);
   const [facingMode, setFacingMode] = useState("environment"); // "environment" = back, "user" = front
+  // Pre-capture step: pick which empresa invoices this ticket + the uso de CFDI,
+  // then take/upload the photo.
+  const [step, setStep] = useState("context"); // "context" → "capture"
+  const [companies, setCompanies] = useState([]);
+  const [companiesLoading, setCompaniesLoading] = useState(true);
+  const [companiesError, setCompaniesError] = useState(false);
+  const [companyId, setCompanyId] = useState(null);
+  const [usoCFDI, setUsoCFDI] = useState(DEFAULT_CFDI_USAGE);
   const cameraInputRef = useRef(null);
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
@@ -55,11 +64,11 @@ export function UploadFlow({ onClose }) {
         throw new Error("Error al subir a storage");
       }
 
-      // 3. Create Ticket
+      // 3. Create Ticket — pin the chosen empresa + uso de CFDI.
       const ticketRes = await fetch("/api/user/tickets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageKey: key }),
+        body: JSON.stringify({ imageKey: key, companyId, usoCFDI }),
       });
 
       if (!ticketRes.ok) {
@@ -206,6 +215,36 @@ export function UploadFlow({ onClose }) {
     return () => document.removeEventListener("keydown", handleKey);
   }, [onClose, isUploading]);
 
+  // Load the user's empresas on open so the context step can offer them and
+  // preselect the default (or the only one).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/user/companies");
+        if (!res.ok) throw new Error("failed");
+        const data = await res.json();
+        if (cancelled) return;
+        const list = data.companies || [];
+        setCompanies(list);
+        const preferred =
+          data.defaultCompanyId && list.some((c) => c.id === data.defaultCompanyId)
+            ? data.defaultCompanyId
+            : list.length === 1
+              ? list[0].id
+              : null;
+        setCompanyId(preferred);
+      } catch {
+        if (!cancelled) setCompaniesError(true);
+      } finally {
+        if (!cancelled) setCompaniesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-6"
@@ -290,7 +329,109 @@ export function UploadFlow({ onClose }) {
 
           {/* Content */}
           <div className="p-[30px]">
-            {showCamera ? (
+            {step === "context" ? (
+              /* Step 1: pick empresa + uso de CFDI */
+              <>
+                <h1
+                  className="m-0"
+                  style={{
+                    fontFamily: "var(--font-display)",
+                    fontWeight: 700,
+                    fontSize: 26,
+                    letterSpacing: "-0.02em",
+                    color: "var(--ink)",
+                  }}
+                >
+                  Sube tu ticket
+                </h1>
+                <p className="text-[15px] mt-[7px] mb-[22px]" style={{ color: "var(--text-muted)" }}>
+                  Elige la empresa y el tipo de gasto antes de tomar la foto.
+                </p>
+
+                {companiesLoading ? (
+                  <div className="py-9 text-center text-[14px]" style={{ color: "var(--text-faint)" }}>
+                    Cargando empresas...
+                  </div>
+                ) : companiesError ? (
+                  <div className="py-6 text-center text-[14px]" style={{ color: "var(--danger-text)" }}>
+                    No se pudieron cargar tus empresas. Cierra y vuelve a intentar.
+                  </div>
+                ) : companies.length === 0 ? (
+                  <div className="py-6 px-5 text-center rounded-xl" style={{ background: "var(--bg-subtle)" }}>
+                    <div className="text-base font-semibold mb-1" style={{ color: "var(--text-strong)" }}>
+                      Aún no tienes constancias
+                    </div>
+                    <p className="text-[13px] mb-4" style={{ color: "var(--text-muted)" }}>
+                      Agrega una constancia de situación fiscal (CSF) para poder facturar.
+                    </p>
+                    <Button as={Link} href="/empresas" variant="primary" fullWidth>
+                      Agregar constancia
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <label className="block text-[13px] font-semibold mb-2" style={{ color: "var(--text-strong)" }}>
+                      Empresa
+                    </label>
+                    <div className="flex flex-col gap-2 mb-4">
+                      {companies.map((c) => {
+                        const selected = c.id === companyId;
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setCompanyId(c.id)}
+                            aria-pressed={selected}
+                            className="text-left rounded-xl border-2 p-3 cursor-pointer transition-all"
+                            style={{
+                              borderColor: selected ? "var(--brand)" : "var(--border-strong)",
+                              background: selected ? "var(--brand-soft)" : "var(--bg-subtle)",
+                            }}
+                          >
+                            <div className="text-[14px] font-semibold" style={{ color: "var(--text-strong)" }}>
+                              {c.businessName || c.tradeName || c.rfc}
+                            </div>
+                            <div className="text-[12px] font-mono mt-0.5" style={{ color: "var(--text-muted)" }}>
+                              {c.rfc}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <label
+                      htmlFor="uso-cfdi"
+                      className="block text-[13px] font-semibold mb-2"
+                      style={{ color: "var(--text-strong)" }}
+                    >
+                      Uso de CFDI / tipo de gasto
+                    </label>
+                    <select
+                      id="uso-cfdi"
+                      value={usoCFDI}
+                      onChange={(e) => setUsoCFDI(e.target.value)}
+                      className="w-full rounded-xl border-2 p-3 text-[14px] mb-5 bg-white cursor-pointer"
+                      style={{ borderColor: "var(--border-strong)", color: "var(--text-strong)" }}
+                    >
+                      {CFDI_USAGE_OPTIONS.map((o) => (
+                        <option key={o.code} value={o.code}>
+                          {o.code} — {o.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <Button
+                      variant="primary"
+                      fullWidth
+                      disabled={!companyId}
+                      onClick={() => setStep("capture")}
+                    >
+                      Continuar
+                    </Button>
+                  </>
+                )}
+              </>
+            ) : showCamera ? (
               /* Camera view */
               <>
                 <div className="flex items-center justify-between mb-4">
@@ -343,6 +484,16 @@ export function UploadFlow({ onClose }) {
               </>
             ) : (
               <>
+                {!isUploading && (
+                  <button
+                    type="button"
+                    onClick={() => setStep("context")}
+                    className="inline-flex items-center gap-1 text-[13px] font-semibold mb-3 cursor-pointer bg-transparent border-0 p-0"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    <ArrowLeft className="w-4 h-4" strokeWidth={2} /> Atrás
+                  </button>
+                )}
                 <h1
                   className="m-0"
                   style={{
@@ -353,7 +504,7 @@ export function UploadFlow({ onClose }) {
                     color: "var(--ink)",
                   }}
                 >
-                  {isUploading ? "Procesando..." : "Sube tu ticket"}
+                  {isUploading ? "Procesando..." : "Toma la foto"}
                 </h1>
                 <p className="text-[15px] mt-[7px] mb-[22px]" style={{ color: "var(--text-muted)" }}>
                   {isUploading

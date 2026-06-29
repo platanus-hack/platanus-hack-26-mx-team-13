@@ -153,6 +153,12 @@ const ticketSchema = new mongoose.Schema(
       ref: "Company",
       default: null,
     },
+    // Uso de CFDI (tipo de gasto) chosen at upload, e.g. "G03". null = use the
+    // default (G03) at billing time. Validated against the SAT catalog on create.
+    usoCFDI: {
+      type: String,
+      default: null,
+    },
 
     // Uploaded receipt image (key in Cloudflare R2)
     imageKey: {

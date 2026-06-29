@@ -4,7 +4,7 @@ import { tasks } from "@trigger.dev/sdk";
 import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Ticket from "@/models/Ticket";
-import Company from "@/models/Company";
+import { resolveCompanyForTicket } from "@/libs/engine/resolveCompany";
 import { INVOICE_STATUS } from "@/libs/engine/state";
 import { createLogger } from "@/libs/core/logger";
 
@@ -72,13 +72,11 @@ export async function POST(request, { params }) {
 
     // Preflight the user's fiscal profile BEFORE claiming the ticket and opening
     // an expensive billing Browserbase session. The fill step assembles billingData
-    // from Company.findOne({ userId, isActive: true }) (most recent first) and throws
-    // the non-human-resolvable MISSING_COMPANY_DATA deep in the run when there is no
-    // Company or it lacks an RFC. Mirror that lookup here and fail fast with a clear,
-    // user-actionable 422 instead.
-    const company = await Company.findOne({ userId, isActive: true })
-      .sort({ createdAt: -1 })
-      .lean();
+    // via resolveCompanyForTicket and throws the non-human-resolvable
+    // MISSING_COMPANY_DATA deep in the run when no Company resolves or it lacks an
+    // RFC. Use the SAME resolver here so this fast-fail 422 matches what the run will
+    // actually use (e.g. a ticket pinned to a now-deleted company fails here, not deep).
+    const company = await resolveCompanyForTicket({ ticket, userId });
     if (!company || !company.rfc) {
       return NextResponse.json(
         {
