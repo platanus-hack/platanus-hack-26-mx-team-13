@@ -6,9 +6,9 @@ import {
   formatTotal,
   formatDate,
   formatDateTime,
-} from "@/components/ticketFormat";
-import { isAnimatedTone } from "@/components/invoiceFormat";
-import InvoiceProgress from "@/components/InvoiceProgress";
+} from "@/libs/format/ticket";
+import { isAnimatedTone } from "@/libs/format/invoice";
+import InvoiceProgress from "@/components/tickets/InvoiceProgress";
 import { getCfdiUsageName } from "@/data/sat-catalogs";
 
 // Resolve the empresa label from a (possibly populated) ticket.companyId, tolerating

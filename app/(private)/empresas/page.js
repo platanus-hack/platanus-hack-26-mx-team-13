@@ -1,4 +1,3 @@
-import { Toaster } from "react-hot-toast";
 import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Company from "@/models/Company";
@@ -34,12 +33,9 @@ export default async function EmpresasPage() {
   }
 
   return (
-    <>
-      <EmpresasView
-        initialCompanies={companies}
-        initialDefaultId={defaultCompanyId}
-      />
-      <Toaster position="bottom-center" />
-    </>
+    <EmpresasView
+      initialCompanies={companies}
+      initialDefaultId={defaultCompanyId}
+    />
   );
 }

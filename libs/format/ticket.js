@@ -1,8 +1,8 @@
 // Shared ticket presentation helpers — status chips + MXN/date formatting.
-// Used by both TicketsSection (dashboard) and TicketsTable (/tickets) so the
-// chip styling and number/date formatting stay in one place.
+// Used by the dashboard recent list and the /tickets view so the chip styling
+// and number/date formatting stay in one place.
 
-import { invoiceChip } from "@/components/invoiceFormat";
+import { invoiceChip } from "@/libs/format/invoice";
 
 // Visual status chips. The Ticket model uses: uploaded | ocr_done | failed.
 export const STATUS = {

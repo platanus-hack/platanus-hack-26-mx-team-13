@@ -1,12 +1,20 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useForm, useWatch } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { Search, ChevronRight, X } from "lucide-react";
 import { Button, Badge, FilterTabs } from "@/components/ui";
+import { apiClientSilent } from "@/libs/api";
 import { UploadFlow } from "@/components/upload/UploadFlow";
-import InvoiceProgress from "@/components/InvoiceProgress";
-import { formatTotal, formatDate, formatDateTime } from "@/components/ticketFormat";
+import InvoiceProgress from "@/components/tickets/InvoiceProgress";
+import { formatTotal, formatDate, formatDateTime } from "@/libs/format/ticket";
 import { getCfdiUsageName } from "@/data/sat-catalogs";
+
+// Trivial schema — the search box is always a valid string; kept for consistency
+// with the form-handling convention (react-hook-form + zod) across the app.
+const SEARCH_SCHEMA = z.object({ q: z.string() });
 
 // Receipt-lifecycle chips — shown only BEFORE an invoice run exists.
 const STATUS_CONFIG = {
@@ -272,7 +280,11 @@ function TicketDetailModal({ ticket, onClose, onChange }) {
 
 export default function TicketsView() {
   const [tab, setTab] = useState("all");
-  const [search, setSearch] = useState("");
+  const { register, control } = useForm({
+    resolver: zodResolver(SEARCH_SCHEMA),
+    defaultValues: { q: "" },
+  });
+  const search = useWatch({ control, name: "q", defaultValue: "" });
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showUpload, setShowUpload] = useState(false);
   const [tickets, setTickets] = useState([]);
@@ -280,11 +292,8 @@ export default function TicketsView() {
 
   const loadTickets = useCallback(async () => {
     try {
-      const res = await fetch("/api/user/tickets?limit=50");
-      if (res.ok) {
-        const data = await res.json();
-        setTickets(data.tickets || []);
-      }
+      const data = await apiClientSilent.get("/user/tickets?limit=50");
+      setTickets(data.tickets || []);
     } catch {
       // Keep existing tickets on error
     } finally {
@@ -376,8 +385,7 @@ export default function TicketsView() {
             <input
               type="text"
               placeholder="Buscar comercio o RFC..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              {...register("q")}
               className="flex-1 border-none outline-none bg-transparent text-sm"
               style={{ color: "var(--text-strong)", fontFamily: "var(--font-sans)" }}
             />

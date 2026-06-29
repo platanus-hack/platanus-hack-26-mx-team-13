@@ -4,7 +4,8 @@ import { useState } from "react";
 import toast from "react-hot-toast";
 import { Building2 } from "lucide-react";
 import { Card } from "@/components/ui";
-import CsfUpload from "@/components/CsfUpload";
+import { apiClientSilent } from "@/libs/api";
+import CsfUpload from "@/components/csf/CsfUpload";
 import CompanyCard from "@/components/empresas/CompanyCard";
 
 // Manage the user's empresas/constancias: list them, add another (CSF upload →
@@ -18,9 +19,7 @@ export default function EmpresasView({ initialCompanies = [], initialDefaultId =
 
   async function refresh() {
     try {
-      const res = await fetch("/api/user/companies");
-      if (!res.ok) throw new Error("failed");
-      const data = await res.json();
+      const data = await apiClientSilent.get("/user/companies");
       setCompanies(data.companies || []);
       setDefaultId(data.defaultCompanyId || null);
     } catch {
@@ -32,17 +31,14 @@ export default function EmpresasView({ initialCompanies = [], initialDefaultId =
     setExtracting(true);
     const toastId = toast.loading("Leyendo tu CSF...");
     try {
-      const res = await fetch("/api/user/extract-csf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || "No pudimos leer tu CSF");
+      await apiClientSilent.post("/user/extract-csf", { key });
       toast.success("Constancia guardada", { id: toastId });
       await refresh();
     } catch (error) {
-      toast.error(error.message || "Algo salió mal", { id: toastId });
+      toast.error(
+        error?.response?.data?.error || error.message || "No pudimos leer tu CSF",
+        { id: toastId }
+      );
     } finally {
       setExtracting(false);
     }
@@ -51,12 +47,7 @@ export default function EmpresasView({ initialCompanies = [], initialDefaultId =
   async function setDefault(companyId) {
     setPendingId(companyId);
     try {
-      const res = await fetch("/api/user/companies", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ companyId }),
-      });
-      if (!res.ok) throw new Error("failed");
+      await apiClientSilent.patch("/user/companies", { companyId });
       toast.success("Empresa predeterminada actualizada");
       await refresh();
     } catch {
@@ -75,10 +66,7 @@ export default function EmpresasView({ initialCompanies = [], initialDefaultId =
     }
     setPendingId(companyId);
     try {
-      const res = await fetch(`/api/user/companies/${companyId}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) throw new Error("failed");
+      await apiClientSilent.delete(`/user/companies/${companyId}`);
       toast.success("Constancia eliminada");
       await refresh();
     } catch {

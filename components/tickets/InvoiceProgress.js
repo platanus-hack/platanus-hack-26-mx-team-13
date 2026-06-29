@@ -1,15 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { apiClientSilent } from "@/libs/api";
 import { INVOICE_STATUS } from "@/libs/engine/state";
-import { STATUS as RECEIPT_STATUS } from "@/components/ticketFormat";
+import { STATUS as RECEIPT_STATUS } from "@/libs/format/ticket";
 import {
   invoiceChip,
   isAnimatedTone,
   isPollableInvoiceStatus,
   stageLabel,
   formatStageTime,
-} from "@/components/invoiceFormat";
+} from "@/libs/format/invoice";
 
 // How often to poll the ticket while a run is in flight.
 const POLL_INTERVAL_MS = 3000;
@@ -99,9 +100,7 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`/api/user/tickets/${ticket.id}`);
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await apiClientSilent.get(`/user/tickets/${ticket.id}`);
       const next = data.ticket;
       if (next?.invoice) {
         setInvoice(next.invoice);
@@ -168,9 +167,9 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
     let cancelled = false;
     const fetchUrl = async () => {
       try {
-        const res = await fetch(`/api/user/tickets/${ticket.id}/liveview`);
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await apiClientSilent.get(
+          `/user/tickets/${ticket.id}/liveview`
+        );
         if (!cancelled) setRunLiveView(data.url || null);
       } catch {
         // Transient — keep the last URL and retry on the next tick.
@@ -205,14 +204,9 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
       setError(null);
       setPollStalled(false);
       try {
-        const res = await fetch(`/api/user/tickets/${ticket.id}/invoice`, {
-          method: "POST",
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setError(data.error || "No se pudo iniciar la factura");
-          return;
-        }
+        const data = await apiClientSilent.post(
+          `/user/tickets/${ticket.id}/invoice`
+        );
         // Optimistically show a queued run; polling fills in stages + status.
         const optimistic = {
           status: data.status || INVOICE_STATUS.QUEUED,
@@ -221,8 +215,8 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
         };
         setInvoice(optimistic);
         onChange?.({ ...ticket, invoice: optimistic });
-      } catch {
-        setError("No se pudo iniciar la factura");
+      } catch (err) {
+        setError(err?.response?.data?.error || "No se pudo iniciar la factura");
       } finally {
         setStarting(false);
       }
@@ -239,19 +233,13 @@ export default function InvoiceProgress({ ticket, compact = false, onChange }) {
       setResuming(true);
       setError(null);
       try {
-        const res = await fetch(`/api/user/tickets/${ticket.id}/invoice/resume`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recordedActions: [] }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setError(data.error || "No se pudo reanudar la factura");
-          return;
-        }
+        await apiClientSilent.post(
+          `/user/tickets/${ticket.id}/invoice/resume`,
+          { recordedActions: [] }
+        );
         refresh();
-      } catch {
-        setError("No se pudo reanudar la factura");
+      } catch (err) {
+        setError(err?.response?.data?.error || "No se pudo reanudar la factura");
       } finally {
         setResuming(false);
       }

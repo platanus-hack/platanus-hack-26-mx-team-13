@@ -4,8 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { Camera, ChevronRight } from "lucide-react";
 import { Button, Badge, Card } from "@/components/ui";
-import CsfSection from "@/components/CsfSection";
-import TicketsSection from "@/components/TicketsSection";
+import CsfSection from "@/components/csf/CsfSection";
+import RecentTickets from "@/components/tickets/RecentTickets";
 import { UploadFlow } from "@/components/upload/UploadFlow";
 import { getTaxRegimeName } from "@/data/sat-catalogs";
 
@@ -164,8 +164,8 @@ export default function DashboardView({ user, company }) {
               </Link>
             </div>
 
-            {/* Uses existing TicketsSection component for ticket list */}
-            <TicketsSection compact reloadKey={reloadKey} />
+            {/* Recent tickets preview list */}
+            <RecentTickets reloadKey={reloadKey} />
           </Card>
         </div>
       </div>

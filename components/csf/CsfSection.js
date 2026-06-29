@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
-import CsfUpload from "@/components/CsfUpload";
+import { apiClientSilent } from "@/libs/api";
+import CsfUpload from "@/components/csf/CsfUpload";
 import { getTaxRegimeName } from "@/data/sat-catalogs";
 
 /**
@@ -28,26 +29,18 @@ export default function CsfSection({ initialCompany = null, compact = false }) {
     const toastId = toast.loading("Leyendo tu CSF...");
 
     try {
-      const res = await fetch("/api/user/extract-csf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
-      });
-
-      const body = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(body.error || "No pudimos leer tu CSF");
-      }
-
-      setCompany(body.company);
+      const data = await apiClientSilent.post("/user/extract-csf", { key });
+      setCompany(data.company);
       // In compact mode the visible profile card is the parent's (server-rendered
       // `company` prop), not this component's state — refresh so it picks up the
       // newly-saved CSF without a manual hard reload.
       router.refresh();
       toast.success("Perfil fiscal guardado", { id: toastId });
     } catch (error) {
-      toast.error(error.message || "Algo salio mal", { id: toastId });
+      toast.error(
+        error?.response?.data?.error || error.message || "No pudimos leer tu CSF",
+        { id: toastId }
+      );
     } finally {
       setIsExtracting(false);
     }

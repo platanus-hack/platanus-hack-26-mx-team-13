@@ -1,20 +1,29 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useForm, Controller } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import toast from "react-hot-toast";
+import { uploadCsfFile } from "@/libs/upload";
 
 // CSF constancias are always PDFs. We gate on the client for a fast UX; the
 // server (generate-upload-token + R2 signature) is the real enforcement.
 const ACCEPT = "application/pdf";
 
+const csfSchema = z.object({
+  file: z
+    .instanceof(File, { message: "Selecciona un PDF" })
+    .refine((f) => f.type === "application/pdf", "Selecciona un archivo PDF"),
+});
+
 /**
  * CsfUpload — pick the CSF constancia PDF and upload it straight to R2 via a
  * presigned PUT URL (#6). Produces the object `key` the parser (#8) consumes.
  *
- * Flow on file pick:
- *   1. POST /api/user/generate-upload-token { kind: "csf" } -> presigned PUT URL + key
- *   2. PUT the file bytes directly to R2                     (never proxied through Next.js)
- *   3. On 200, surface the object key + success toast.
+ * The file input is wired through react-hook-form (Controller) + a zod schema;
+ * the actual upload runs through the shared `uploadCsfFile` helper. The form is
+ * fire-on-pick (no submit button), so picking a file validates then uploads.
  *
  * @param {Object} [props]
  * @param {(key: string) => void} [props.onUploaded] - Called with the R2 object key.
@@ -24,79 +33,64 @@ export default function CsfUpload({ onUploaded, compact = false }) {
   const [key, setKey] = useState(null);
   const fileInputRef = useRef(null);
 
-  async function uploadCsf(file) {
-    if (!file) return;
+  const { control, handleSubmit, reset } = useForm({
+    resolver: zodResolver(csfSchema),
+    defaultValues: { file: null },
+  });
 
-    // Reject non-PDFs client-side before hitting the network.
-    if (file.type !== "application/pdf") {
-      toast.error("Please select a PDF file");
-      return;
-    }
-
+  async function onValid({ file }) {
     setIsUploading(true);
-    const toastId = toast.loading("Uploading CSF…");
-
+    const toastId = toast.loading("Subiendo CSF...");
     try {
-      // 1. Ask the server for a presigned PUT URL scoped to this user.
-      const tokenRes = await fetch("/api/user/generate-upload-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: file.name || "csf.pdf",
-          contentType: "application/pdf",
-          kind: "csf",
-        }),
-      });
-
-      if (!tokenRes.ok) {
-        const { error } = await tokenRes.json().catch(() => ({}));
-        throw new Error(error || "Could not get upload URL");
-      }
-
-      const { uploadUrl, key: objectKey } = await tokenRes.json();
-
-      // 2. Upload the bytes straight to R2. The Content-Type must match the one
-      // baked into the presigned signature or R2 rejects the PUT.
-      const putRes = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": "application/pdf" },
-        body: file,
-      });
-
-      if (!putRes.ok) {
-        throw new Error("Upload to storage failed");
-      }
-
-      // 3. Keep the key in state to hand off to the parser (#8).
+      const objectKey = await uploadCsfFile(file);
       setKey(objectKey);
-      toast.success("CSF uploaded", { id: toastId });
+      toast.success("CSF subido", { id: toastId });
       onUploaded?.(objectKey);
     } catch (error) {
-      toast.error(error.message || "Something went wrong", { id: toastId });
+      toast.error(
+        error?.response?.data?.error || error.message || "Algo salió mal",
+        { id: toastId }
+      );
     } finally {
       setIsUploading(false);
+      reset();
     }
   }
 
-  function handleChange(event) {
-    const file = event.target.files?.[0];
-    // Reset so picking the same file again still fires onChange.
-    event.target.value = "";
-    uploadCsf(file);
+  function onInvalid(errors) {
+    if (errors.file?.message) toast.error(errors.file.message);
   }
 
-  // Compact mode for dashboard: smaller ghost button
-  if (compact) {
-    return (
-      <>
+  // Hidden file input driven by RHF: on pick, set the value then submit (which
+  // validates + uploads). Reset the input value so re-picking the same file fires.
+  const fileField = (
+    <Controller
+      name="file"
+      control={control}
+      render={({ field }) => (
         <input
           ref={fileInputRef}
           type="file"
           accept={ACCEPT}
           className="hidden"
-          onChange={handleChange}
           disabled={isUploading}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (!file) return;
+            field.onChange(file);
+            handleSubmit(onValid, onInvalid)();
+          }}
         />
+      )}
+    />
+  );
+
+  // Compact mode for dashboard: smaller ghost button
+  if (compact) {
+    return (
+      <>
+        {fileField}
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
@@ -116,14 +110,7 @@ export default function CsfUpload({ onUploaded, compact = false }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept={ACCEPT}
-        className="hidden"
-        onChange={handleChange}
-        disabled={isUploading}
-      />
+      {fileField}
 
       <button
         type="button"

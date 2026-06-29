@@ -1,16 +1,25 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useForm, Controller, useWatch } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import Link from "next/link";
-import { X, Camera, Upload, Check, SwitchCamera, ArrowLeft } from "lucide-react";
+import { X, Camera, SwitchCamera, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui";
+import { apiClientSilent } from "@/libs/api";
+import { useTicketUpload } from "@/hooks/useUpload";
 import { CFDI_USAGE_OPTIONS, DEFAULT_CFDI_USAGE } from "@/data/sat-catalogs";
-import toast from "react-hot-toast";
 
 const ACCEPT = "image/*";
 
+// The pre-capture context: which empresa invoices this ticket + the uso de CFDI.
+const uploadContextSchema = z.object({
+  companyId: z.string().min(1, "Elige una empresa"),
+  usoCFDI: z.string().min(1),
+});
+
 export function UploadFlow({ onClose }) {
-  const [isUploading, setIsUploading] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
   const [stream, setStream] = useState(null);
   const [facingMode, setFacingMode] = useState("environment"); // "environment" = back, "user" = front
@@ -20,84 +29,26 @@ export function UploadFlow({ onClose }) {
   const [companies, setCompanies] = useState([]);
   const [companiesLoading, setCompaniesLoading] = useState(true);
   const [companiesError, setCompaniesError] = useState(false);
-  const [companyId, setCompanyId] = useState(null);
-  const [usoCFDI, setUsoCFDI] = useState(DEFAULT_CFDI_USAGE);
   const cameraInputRef = useRef(null);
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // Real upload logic (from TicketUpload)
-  async function uploadTicket(file) {
-    if (!file) return;
+  // The context form (empresa + uso de CFDI) is owned by react-hook-form.
+  const { control, handleSubmit, reset } = useForm({
+    resolver: zodResolver(uploadContextSchema),
+    defaultValues: { companyId: "", usoCFDI: DEFAULT_CFDI_USAGE },
+  });
+  const companyId = useWatch({ control, name: "companyId" });
+  const usoCFDI = useWatch({ control, name: "usoCFDI" });
 
-    setIsUploading(true);
-    const toastId = toast.loading("Subiendo ticket...");
-
-    try {
-      // 1. Get presigned URL
-      const tokenRes = await fetch("/api/user/generate-upload-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: file.name || "ticket",
-          contentType: file.type || "application/octet-stream",
-          kind: "ticket",
-        }),
-      });
-
-      if (!tokenRes.ok) {
-        const { error } = await tokenRes.json().catch(() => ({}));
-        throw new Error(error || "No se pudo obtener URL de subida");
-      }
-
-      const { uploadUrl, key } = await tokenRes.json();
-
-      // 2. Upload to R2
-      const putRes = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-        body: file,
-      });
-
-      if (!putRes.ok) {
-        throw new Error("Error al subir a storage");
-      }
-
-      // 3. Create Ticket — pin the chosen empresa + uso de CFDI.
-      const ticketRes = await fetch("/api/user/tickets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageKey: key, companyId, usoCFDI }),
-      });
-
-      if (!ticketRes.ok) {
-        const { error } = await ticketRes.json().catch(() => ({}));
-        throw new Error(error || "No se pudo crear el ticket");
-      }
-
-      const { ticketId } = await ticketRes.json();
-
-      // 4. Run OCR
-      toast.loading("Leyendo ticket...", { id: toastId });
-      const ocrRes = await fetch(`/api/user/tickets/${ticketId}/ocr`, {
-        method: "POST",
-      });
-
-      if (ocrRes.ok) {
-        toast.success("Ticket procesado", { id: toastId });
-      } else {
-        const { error } = await ocrRes.json().catch(() => ({}));
-        toast.error(error || "Subido, pero no se pudo leer", { id: toastId });
-      }
-
-      // Close modal on success
-      onClose();
-    } catch (error) {
-      toast.error(error.message || "Algo salio mal", { id: toastId });
-      setIsUploading(false);
-    }
-  }
+  // Upload state + the loading/success/error toast lifecycle live in the shared
+  // hook; the capture handlers below just call uploadTicket(file).
+  const { isUploading, uploadTicket } = useTicketUpload({
+    companyId,
+    usoCFDI,
+    onDone: onClose,
+  });
 
   function handleChange(event) {
     const file = event.target.files?.[0];
@@ -221,9 +172,7 @@ export function UploadFlow({ onClose }) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/user/companies");
-        if (!res.ok) throw new Error("failed");
-        const data = await res.json();
+        const data = await apiClientSilent.get("/user/companies");
         if (cancelled) return;
         const list = data.companies || [];
         setCompanies(list);
@@ -232,8 +181,9 @@ export function UploadFlow({ onClose }) {
             ? data.defaultCompanyId
             : list.length === 1
               ? list[0].id
-              : null;
-        setCompanyId(preferred);
+              : "";
+        // Seed the form once companies arrive so the default empresa is preselected.
+        reset({ companyId: preferred, usoCFDI: DEFAULT_CFDI_USAGE });
       } catch {
         if (!cancelled) setCompaniesError(true);
       } finally {
@@ -243,7 +193,7 @@ export function UploadFlow({ onClose }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reset]);
 
   return (
     <div
@@ -373,31 +323,37 @@ export function UploadFlow({ onClose }) {
                     <label className="block text-[13px] font-semibold mb-2" style={{ color: "var(--text-strong)" }}>
                       Empresa
                     </label>
-                    <div className="flex flex-col gap-2 mb-4">
-                      {companies.map((c) => {
-                        const selected = c.id === companyId;
-                        return (
-                          <button
-                            key={c.id}
-                            type="button"
-                            onClick={() => setCompanyId(c.id)}
-                            aria-pressed={selected}
-                            className="text-left rounded-xl border-2 p-3 cursor-pointer transition-all"
-                            style={{
-                              borderColor: selected ? "var(--brand)" : "var(--border-strong)",
-                              background: selected ? "var(--brand-soft)" : "var(--bg-subtle)",
-                            }}
-                          >
-                            <div className="text-[14px] font-semibold" style={{ color: "var(--text-strong)" }}>
-                              {c.businessName || c.tradeName || c.rfc}
-                            </div>
-                            <div className="text-[12px] font-mono mt-0.5" style={{ color: "var(--text-muted)" }}>
-                              {c.rfc}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <Controller
+                      name="companyId"
+                      control={control}
+                      render={({ field }) => (
+                        <div className="flex flex-col gap-2 mb-4">
+                          {companies.map((c) => {
+                            const selected = c.id === field.value;
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => field.onChange(c.id)}
+                                aria-pressed={selected}
+                                className="text-left rounded-xl border-2 p-3 cursor-pointer transition-all"
+                                style={{
+                                  borderColor: selected ? "var(--brand)" : "var(--border-strong)",
+                                  background: selected ? "var(--brand-soft)" : "var(--bg-subtle)",
+                                }}
+                              >
+                                <div className="text-[14px] font-semibold" style={{ color: "var(--text-strong)" }}>
+                                  {c.businessName || c.tradeName || c.rfc}
+                                </div>
+                                <div className="text-[12px] font-mono mt-0.5" style={{ color: "var(--text-muted)" }}>
+                                  {c.rfc}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    />
 
                     <label
                       htmlFor="uso-cfdi"
@@ -406,25 +362,30 @@ export function UploadFlow({ onClose }) {
                     >
                       Uso de CFDI / tipo de gasto
                     </label>
-                    <select
-                      id="uso-cfdi"
-                      value={usoCFDI}
-                      onChange={(e) => setUsoCFDI(e.target.value)}
-                      className="w-full rounded-xl border-2 p-3 text-[14px] mb-5 bg-white cursor-pointer"
-                      style={{ borderColor: "var(--border-strong)", color: "var(--text-strong)" }}
-                    >
-                      {CFDI_USAGE_OPTIONS.map((o) => (
-                        <option key={o.code} value={o.code}>
-                          {o.code} — {o.name}
-                        </option>
-                      ))}
-                    </select>
+                    <Controller
+                      name="usoCFDI"
+                      control={control}
+                      render={({ field }) => (
+                        <select
+                          id="uso-cfdi"
+                          {...field}
+                          className="w-full rounded-xl border-2 p-3 text-[14px] mb-5 bg-white cursor-pointer"
+                          style={{ borderColor: "var(--border-strong)", color: "var(--text-strong)" }}
+                        >
+                          {CFDI_USAGE_OPTIONS.map((o) => (
+                            <option key={o.code} value={o.code}>
+                              {o.code} — {o.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    />
 
                     <Button
                       variant="primary"
                       fullWidth
                       disabled={!companyId}
-                      onClick={() => setStep("capture")}
+                      onClick={handleSubmit(() => setStep("capture"))}
                     >
                       Continuar
                     </Button>
@@ -589,65 +550,3 @@ export function UploadFlow({ onClose }) {
     </div>
   );
 }
-
-/*
- * ============================================================================
- * ANIMACIONES PARA FUTURO USO
- * ============================================================================
- * Cuando el flujo completo este listo (generacion de CFDI, etc.), se pueden
- * usar estas animaciones de pasos de procesamiento y pantalla de exito.
- *
- * Processing steps config:
- * const steps = [
- *   { icon: Upload, label: "Subiendo la foto" },
- *   { icon: Search, label: "Leyendo el ticket con OCR" },
- *   { icon: Sparkles, label: "Extrayendo datos con IA" },
- * ];
- *
- * StepRow component for animated progress:
- * function StepRow({ icon: Icon, label, state }) {
- *   // state: "pending" | "active" | "done"
- *   return (
- *     <div className={`flex items-center gap-[13px] transition-opacity duration-300 ${
- *       state === "pending" ? "opacity-40" : "opacity-100"
- *     }`}>
- *       <span className={`w-7 h-7 rounded-full flex-none grid place-items-center transition-all ${
- *         state === "done"
- *           ? "bg-[var(--brand)] text-white"
- *           : state === "active"
- *           ? "bg-[var(--brand-soft)] text-[var(--brand-press)]"
- *           : "bg-[var(--bg-inset)] text-[var(--brand-press)]"
- *       }`}>
- *         {state === "done" ? (
- *           <Check className="w-[14px] h-[14px]" strokeWidth={2.5} />
- *         ) : (
- *           <Icon className="w-[15px] h-[15px]" strokeWidth={1.9} />
- *         )}
- *       </span>
- *       <span className="text-[14.5px] font-medium" style={{ color: "var(--text-body)" }}>
- *         {label}
- *       </span>
- *       {state === "active" && (
- *         <span
- *           className="ml-auto w-2 h-2 rounded-full flex-none"
- *           style={{ background: "var(--brand)", animation: "fct-pulse 1s ease-in-out infinite" }}
- *         />
- *       )}
- *     </div>
- *   );
- * }
- *
- * Done/Success screen:
- * {phase === "done" && (
- *   <div className="rounded-[var(--radius-2xl)] p-[34px] text-center" style={{...}}>
- *     <div className="w-[66px] h-[66px] rounded-full grid place-items-center mx-auto mb-[18px]"
- *       style={{ background: "var(--brand)", boxShadow: "var(--shadow-brand)" }}>
- *       <Check className="w-8 h-8 text-white" strokeWidth={2.4} />
- *     </div>
- *     <h2>Factura lista!</h2>
- *     <p>Generamos el CFDI 4.0 de tu ticket de {result.merchant}.</p>
- *     // Summary card with merchant, RFC, folio, total
- *     // Action buttons: "Procesar otro" / "Ver factura"
- *   </div>
- * )}
- */

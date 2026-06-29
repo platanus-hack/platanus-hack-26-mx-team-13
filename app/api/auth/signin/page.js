@@ -1,4 +1,4 @@
-import SignInButton from "@/components/SignInButton";
+import SignInButton from "@/components/auth/SignInButton";
 
 // Public login page: a split layout with a green brand panel on the left and
 // the Google sign-in on the right. Unauthenticated users land here.

@@ -1,4 +1,3 @@
-import { Toaster } from "react-hot-toast";
 import { auth } from "@/libs/core/auth";
 import connectMongoose from "@/libs/core/mongoose";
 import Company from "@/models/Company";
@@ -29,10 +28,5 @@ export default async function DashboardPage() {
     company = null;
   }
 
-  return (
-    <>
-      <DashboardView user={session.user} company={company} />
-      <Toaster position="bottom-center" />
-    </>
-  );
+  return <DashboardView user={session.user} company={company} />;
 }

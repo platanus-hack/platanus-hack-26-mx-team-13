@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { Toaster } from "react-hot-toast";
 import { auth, signOut } from "@/libs/core/auth";
 import { LogOut } from "lucide-react";
 import { AppShell } from "@/components/nav/AppShell";
@@ -53,11 +54,16 @@ export default async function PrivateLayout({ children }) {
   );
 
   return (
-    <AppShell
-      user={{ name: user.name, email: user.email, initials }}
-      signOutSlot={signOutSlot}
-    >
-      {children}
-    </AppShell>
+    <>
+      <AppShell
+        user={{ name: user.name, email: user.email, initials }}
+        signOutSlot={signOutSlot}
+      >
+        {children}
+      </AppShell>
+      {/* Single app-wide Toaster for every authenticated route (fixes toasts
+          silently failing on pages that didn't mount their own). */}
+      <Toaster position="bottom-center" />
+    </>
   );
 }
