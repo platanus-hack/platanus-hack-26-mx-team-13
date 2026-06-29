@@ -71,6 +71,27 @@ const MERCHANTS = [
     notes: "chain — official facturación portal",
   },
   {
+    merchantName: "Alsuper",
+    // Real issuing RFC (Operadora Futurama, ALSUPER's operator) — REQUIRED so
+    // resolve_portal canonicalizes to it and the deterministic Alsuper driver
+    // (libs/engine/portals/alsuper.js, keyed by this RFC) fires.
+    rfcEmisor: "OFU910626UQO",
+    invoiceUrl: "https://facturacion.alsuper.com/",
+    aliases: ["Alsuper", "Al Super", "Alsuper Plus", "Operadora Futurama"],
+    fieldHints: {
+      important: [
+        "Folio (numeric, e.g. 0049441)",
+        "Punto de Venta (e.g. 08)",
+        "Tienda (e.g. #058)",
+        "Total de venta with 2 decimals",
+        "Fecha de venta (DD/MM/YY)",
+      ],
+      notes:
+        "Alsuper (Operadora Futurama) tickets print 'Folio:', 'Punto de Venta:', 'Tienda #NNN', a long barcode number, and a facturación URL. The portal SUCURSAL select uses the Tienda number as the option value. RFC emisor OFU910626UQO, régimen 623. Date DD/MM/YY.",
+    },
+    notes: "chain — Chihuahua/northern MX grocery (Operadora Futurama); portal facturacion.alsuper.com + deterministic driver",
+  },
+  {
     merchantName: "Home Depot",
     invoiceUrl: "https://facturacion.homedepot.com.mx/",
     aliases: ["Home Depot", "HomeDepot", "Home Depot Mexico"],

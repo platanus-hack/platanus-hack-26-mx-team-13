@@ -9,10 +9,12 @@
 // trigger/processInvoice.js). Everything else stays on the generic recipe path.
 
 import { driveOxxoToDownload, OXXO_RFC } from "./oxxo.js";
+import { driveAlsuperToDownload, ALSUPER_RFC } from "./alsuper.js";
 
 // Issuing RFC (the canonical merchant key resolve_portal produces) → driver.
 const DRIVERS = Object.freeze({
   [OXXO_RFC]: driveOxxoToDownload,
+  [ALSUPER_RFC]: driveAlsuperToDownload,
 });
 
 /**

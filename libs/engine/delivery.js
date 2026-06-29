@@ -17,6 +17,13 @@
 // button's clientId param, fetch() it (same-origin → session cookies ride along),
 // and read the bytes back as base64. The button ids are auto-generated and shift
 // per session, so we locate the buttons by their visible TEXT, never by id.
+//
+// Not every portal is PrimeFaces. ASP.NET portals (e.g. Alsuper) deliver the same
+// files either as a plain `<a href>` download or via an `__doPostBack` button. So
+// capture tries, IN ORDER, three same-origin in-page strategies and keeps the first
+// whose bytes sniff as a real PDF/XML: (1) the JSF form-POST above, (2) an anchor's
+// href, (3) an ASP.NET __doPostBack form-POST. OXXO is unaffected — its JSF POST
+// succeeds first, so the fallbacks never run.
 
 import { putObjectBuffer } from "@/libs/storage/r2";
 import { createLogger } from "@/libs/core/logger";
@@ -86,6 +93,114 @@ async function fetchFileViaFormPost(page, buttonText) {
   }, buttonText);
 }
 
+/**
+ * Capture a file delivered as a plain `<a href>` download (ASP.NET portals like
+ * Alsuper). Matches the anchor by accessible name (text/aria-label/title) and
+ * fetch()es its href same-origin. Returns { err } when no usable anchor exists.
+ *
+ * @param {import("playwright").Page} page
+ * @param {string} buttonText - visible label to match (lowercased contains).
+ * @returns {Promise<{b64?:string,len?:number,contentType?:string,filename?:string,err?:string}>}
+ */
+async function fetchFileViaAnchor(page, buttonText) {
+  return page.evaluate(async (label) => {
+    const re = new RegExp(label, "i");
+    const accName = (e) =>
+      e.innerText || e.textContent || e.getAttribute("aria-label") || e.title || "";
+    const a = [...document.querySelectorAll("a[href]")].find(
+      (e) =>
+        re.test(accName(e)) && !/^\s*(#|javascript:)/i.test(e.getAttribute("href") || "")
+    );
+    if (!a) return { err: "download anchor not found" };
+
+    const res = await fetch(a.href, { credentials: "include" });
+    const ab = await res.arrayBuffer();
+    const bytes = new Uint8Array(ab);
+    let s = "";
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return {
+      b64: btoa(s),
+      len: bytes.length,
+      contentType: res.headers.get("content-type") || "",
+      filename:
+        parseFilename(res.headers.get("content-disposition") || "") ||
+        a.getAttribute("download") ||
+        null,
+    };
+
+    function parseFilename(cd) {
+      const m = /filename\*?=(?:UTF-8'')?["']?([^"';]+)/i.exec(cd || "");
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+  }, buttonText);
+}
+
+/**
+ * Capture a file delivered by an ASP.NET WebForms `__doPostBack` button (Alsuper).
+ * Serializes the form (incl. __VIEWSTATE / __EVENTVALIDATION), sets __EVENTTARGET /
+ * __EVENTARGUMENT from the control's onclick/href (or falls back to the button's own
+ * name=value), and POSTs same-origin. Returns { err } when no control matches.
+ *
+ * @param {import("playwright").Page} page
+ * @param {string} buttonText - visible label to match (lowercased contains).
+ * @returns {Promise<{b64?:string,len?:number,contentType?:string,filename?:string,err?:string}>}
+ */
+async function fetchFileViaAspNetPostback(page, buttonText) {
+  return page.evaluate(async (label) => {
+    const re = new RegExp(label, "i");
+    const accName = (e) =>
+      e.innerText || e.textContent || e.getAttribute("aria-label") || e.title || e.value || "";
+    const el = [
+      ...document.querySelectorAll("a,button,input[type=submit],input[type=button]"),
+    ].find((e) => re.test(accName(e)));
+    if (!el) return { err: "postback control not found" };
+
+    const form = el.closest("form") || document.forms[0];
+    if (!form) return { err: "no form for postback control" };
+
+    const params = new URLSearchParams();
+    for (const c of form.elements) {
+      if (!c.name || c.disabled) continue;
+      if ((c.type === "checkbox" || c.type === "radio") && !c.checked) continue;
+      if (c.type === "submit" || c.type === "button") continue;
+      params.append(c.name, c.value);
+    }
+
+    const src = `${el.getAttribute("href") || ""} ${el.getAttribute("onclick") || ""}`;
+    const m = /__doPostBack\(\s*['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]\s*\)/.exec(src);
+    if (m) {
+      params.set("__EVENTTARGET", m[1]);
+      params.set("__EVENTARGUMENT", m[2]);
+    } else if (el.name) {
+      params.set(el.name, el.value || el.name);
+    } else {
+      return { err: "no postback target" };
+    }
+
+    const res = await fetch(form.action || location.href, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: params.toString(),
+      credentials: "include",
+    });
+    const ab = await res.arrayBuffer();
+    const bytes = new Uint8Array(ab);
+    let s = "";
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return {
+      b64: btoa(s),
+      len: bytes.length,
+      contentType: res.headers.get("content-type") || "",
+      filename: parseFilename(res.headers.get("content-disposition") || ""),
+    };
+
+    function parseFilename(cd) {
+      const mm = /filename\*?=(?:UTF-8'')?["']?([^"';]+)/i.exec(cd || "");
+      return mm ? decodeURIComponent(mm[1]) : null;
+    }
+  }, buttonText);
+}
+
 /** True when bytes look like a PDF (`%PDF`). */
 function looksLikePdf(buf) {
   return buf.length >= 4 && buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
@@ -128,28 +243,40 @@ export async function captureInvoiceFiles(page) {
     ["xml", XML_BUTTON_TEXT, looksLikeXml],
     ["pdf", PDF_BUTTON_TEXT, looksLikePdf],
   ];
+  // Tried in order; the first whose bytes sniff as a real file wins. OXXO's JSF
+  // POST succeeds first, so the ASP.NET fallbacks (Alsuper) never run for it.
+  const STRATEGIES = [
+    fetchFileViaFormPost,
+    fetchFileViaAnchor,
+    fetchFileViaAspNetPostback,
+  ];
 
   for (const [kind, text, sniff] of jobs) {
-    const res = await fetchFileViaFormPost(page, text);
-    if (!res || res.err || !res.b64 || !res.len) {
-      log.warn("Invoice file capture missed", { kind, reason: res?.err || "empty" });
-      continue;
-    }
-    const buffer = Buffer.from(res.b64, "base64");
-    if (!sniff(buffer)) {
-      // The POST returned something that isn't the file (an HTML error / redirect).
-      log.warn("Captured bytes are not a valid file", {
+    for (const strategy of STRATEGIES) {
+      const res = await strategy(page, text);
+      if (!res || res.err || !res.b64 || !res.len) continue;
+      const buffer = Buffer.from(res.b64, "base64");
+      if (!sniff(buffer)) {
+        // The response wasn't the file (an HTML error / postback re-render) — let
+        // the next strategy try instead of giving up on this file.
+        log.warn("Captured bytes are not a valid file", {
+          kind,
+          strategy: strategy.name,
+          len: buffer.length,
+          head: buffer.slice(0, 24).toString("utf8"),
+        });
+        continue;
+      }
+      out[kind] = { buffer, filename: res.filename || `factura.${kind}` };
+      log.info("Invoice file captured", {
         kind,
+        strategy: strategy.name,
         len: buffer.length,
-        head: buffer.slice(0, 24).toString("utf8"),
+        filename: out[kind].filename,
       });
-      continue;
+      break;
     }
-    out[kind] = {
-      buffer,
-      filename: res.filename || `factura.${kind}`,
-    };
-    log.info("Invoice file captured", { kind, len: buffer.length, filename: out[kind].filename });
+    if (!out[kind]) log.warn("Invoice file capture missed", { kind });
   }
 
   return out;
