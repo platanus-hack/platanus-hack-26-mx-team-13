@@ -201,6 +201,65 @@ async function fetchFileViaAspNetPostback(page, buttonText) {
   }, buttonText);
 }
 
+/**
+ * Capture a file from an embedded viewer or a same-origin link whose URL targets the
+ * file type (Alsuper renders the generated CFDI in an <iframe>/<embed> PDF viewer on
+ * …/Factura?uuid=…, with no "Descargar" button). Collects candidate URLs from
+ * iframe/embed/object src and anchor hrefs matching the requested format, fetches each
+ * same-origin, and returns the first non-empty body (the sniff in captureInvoiceFiles
+ * rejects wrong types). Returns { err } when nothing matches.
+ *
+ * @param {import("playwright").Page} page
+ * @param {string} buttonText - "descargar pdf" / "descargar xml" — the kind is read from it.
+ * @returns {Promise<{b64?:string,len?:number,contentType?:string,filename?:string,err?:string}>}
+ */
+async function fetchFileViaEmbeddedSrc(page, buttonText) {
+  return page.evaluate(async (label) => {
+    const wantXml = /xml/i.test(label);
+    const fmt = wantXml ? "xml" : "pdf";
+
+    const urls = [];
+    const add = (u) => {
+      if (!u || /^\s*(#|javascript:|data:|blob:)/i.test(u)) return;
+      const lu = u.toLowerCase();
+      // Match the format as an extension, path segment, or query hint.
+      if (new RegExp(`(\\.|/|=|_|-)${fmt}(\\b|\\?|&|$)`).test(lu) || lu.includes(`format=${fmt}`) || lu.includes(`tipo=${fmt}`)) {
+        urls.push(u);
+      }
+    };
+    for (const el of document.querySelectorAll("iframe[src],embed[src],object[data],a[href]")) {
+      add(el.getAttribute("src") || el.getAttribute("data") || el.getAttribute("href"));
+    }
+    if (!urls.length) return { err: "no embedded source" };
+
+    for (const raw of urls) {
+      try {
+        const abs = new URL(raw, location.href).href;
+        const res = await fetch(abs, { credentials: "include" });
+        const ab = await res.arrayBuffer();
+        const bytes = new Uint8Array(ab);
+        if (!bytes.length) continue;
+        let s = "";
+        for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+        return {
+          b64: btoa(s),
+          len: bytes.length,
+          contentType: res.headers.get("content-type") || "",
+          filename: parseFilename(res.headers.get("content-disposition") || ""),
+        };
+      } catch {
+        /* try the next candidate */
+      }
+    }
+    return { err: "embedded fetch failed" };
+
+    function parseFilename(cd) {
+      const m = /filename\*?=(?:UTF-8'')?["']?([^"';]+)/i.exec(cd || "");
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+  }, buttonText);
+}
+
 /** True when bytes look like a PDF (`%PDF`). */
 function looksLikePdf(buf) {
   return buf.length >= 4 && buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
@@ -249,6 +308,7 @@ export async function captureInvoiceFiles(page) {
     fetchFileViaFormPost,
     fetchFileViaAnchor,
     fetchFileViaAspNetPostback,
+    fetchFileViaEmbeddedSrc,
   ];
 
   for (const [kind, text, sniff] of jobs) {

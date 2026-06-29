@@ -303,12 +303,23 @@ export async function driveAlsuperToDownload(page, data) {
     'input[type=submit]',
   ]);
 
-  // Wait for the success / download screen. Expose the download controls by following
-  // "Ver mis facturas" when it appears, so delivery.js can collect PDF + XML.
+  // Wait for the success screen. On Alsuper a generated CFDI lands on
+  // …/Factura?uuid=<folio fiscal> with the PDF shown in an embedded viewer — there is
+  // NO "Descargar PDF/XML" text on it, so the UUID in the URL is the robust success
+  // signal (hunting for download text here would false-fail). We stay on that page so
+  // delivery.js can pull the embedded PDF; only when we never reach it do we try
+  // following "Ver mis facturas" (link OR button) to find explicit download controls.
   let reachedDownload = false;
   for (let s = 0; s < 14; s++) {
     await page.waitForTimeout(2000);
-    const ver = page.locator('a:has-text("Ver mis facturas")').first();
+    const url = String(page.url() || "");
+    if (/uuid=/i.test(url) || /\/factura(\?|\/|$)/i.test(url)) {
+      reachedDownload = true;
+      break;
+    }
+    const ver = page
+      .locator('a:has-text("Ver mis facturas"), button:has-text("Ver mis facturas")')
+      .first();
     if (await ver.count().catch(() => 0)) {
       await ver.click({ timeout: 4000 }).catch(() => {});
       await page.waitForTimeout(1500);
